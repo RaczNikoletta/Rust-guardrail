@@ -44,3 +44,6 @@ The project safeguards LLM-powered applications against common security vulnerab
                             ▼
                  [ Client / User ]
 ```
+
+Redactor test run:
+<img width="1630" height="141" alt="image" src="https://github.com/user-attachments/assets/78157264-4d50-4317-8ff5-c0122c26927d" />
