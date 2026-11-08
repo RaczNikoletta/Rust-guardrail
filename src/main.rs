@@ -19,24 +19,26 @@ struct ChatResponse {
 
 #[tokio::main]
 async fn main() {
-    // Load environment variables from .env file
     dotenvy::dotenv().ok();
 
-    // Define Axum application routes
     let app = Router::new().route("/v1/chat", post(handle_chat));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     println!("🛡️  Rust Guardrail Proxy running on: http://{}", addr);
 
-    // Bind and start the HTTP server
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
 async fn handle_chat(Json(payload): Json<ChatRequest>) -> Json<ChatResponse> {
-    // Instantiate PII Redactor and sanitize incoming prompt
     let redactor = PiiRedactor::new();
     let sanitized = redactor.redact(&payload.prompt);
+
+    // --- LOGGING TO CONSOLE ---
+    println!("\n--------------------------------------------------");
+    println!("📥 Incoming Prompt:  {}", payload.prompt);
+    println!("🛡️  Sanitized Prompt: {}", sanitized);
+    println!("--------------------------------------------------\n");
 
     Json(ChatResponse {
         original_prompt: payload.prompt,
