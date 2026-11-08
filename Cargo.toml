@@ -1,0 +1,22 @@
+[package]
+name = "rust-guardrail"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# HTTP szerver és routing
+axum = "0.7"
+tokio = { version = "1.0", features = ["full"] }
+
+# HTTP kliens az LLM és külső API hívásokhoz
+reqwest = { version = "0.11", features = ["json"] }
+
+# Adatszerializáció
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Pattern Matching PII és Injection szűréshez
+regex = "1.10"
+
+# Környezeti változók (.env)
+dotenvy = "0.15"

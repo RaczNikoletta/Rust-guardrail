@@ -1,0 +1,9 @@
+# Environment variables (API keys, secrets)
+.env
+
+# Build outputs (Rust target folder)
+/target/
+
+# IDE specific files
+.vscode/
+.idea/
