@@ -26,3 +26,57 @@ impl PiiRedactor {
         step3.to_string()
     }
 }
+// --- PII redactor test
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_email_redaction() {
+        let redactor = PiiRedactor::new();
+        let input = "Contact me at user@example.com for details.";
+        let redacted = redactor.redact(input);
+        
+        assert_eq!(redacted, "Contact me at [REDACTED_EMAIL] for details.");
+    }
+
+    #[test]
+    fn test_taj_number_redaction() {
+        let redactor = PiiRedactor::new();
+        let input = "My TAJ number is 123-456-789.";
+        let redacted = redactor.redact(input);
+        
+        assert_eq!(redacted, "My TAJ number is [REDACTED_TAJ].");
+    }
+
+    #[test]
+    fn test_credit_card_redaction() {
+        let redactor = PiiRedactor::new();
+        let input = "Card number: 4532 0150 1234 5678.";
+        let redacted = redactor.redact(input);
+        
+        assert_eq!(redacted, "Card number: [REDACTED_CARD].");
+    }
+
+    #[test]
+    fn test_multiple_pii_in_one_prompt() {
+        let redactor = PiiRedactor::new();
+        let input = "Email: test@example.com, Card: 4532-0150-1234-5678, TAJ: 123 456 789";
+        let redacted = redactor.redact(input);
+        
+        assert_eq!(
+            redacted, 
+            "Email: [REDACTED_EMAIL], Card: [REDACTED_CARD], TAJ: [REDACTED_TAJ]"
+        );
+    }
+
+    #[test]
+    fn test_clean_prompt_remains_unchanged() {
+        let redactor = PiiRedactor::new();
+        let input = "Write a Rust program to calculate Fibonacci numbers.";
+        let redacted = redactor.redact(input);
+        
+        assert_eq!(redacted, input);
+    }
+}
