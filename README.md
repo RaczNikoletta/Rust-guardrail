@@ -18,6 +18,7 @@ The project safeguards LLM-powered applications against common security vulnerab
 
 ## 🏗️ System Architecture
 
+```text
 [ Client / User ]
         │
         ▼ (HTTP POST /v1/chat)
@@ -42,3 +43,4 @@ The project safeguards LLM-powered applications against common security vulnerab
                             │ (Safe Response / Audit Log)
                             ▼
                  [ Client / User ]
+```
