@@ -8,8 +8,8 @@ edition = "2021"
 axum = "0.7"
 tokio = { version = "1.0", features = ["full"] }
 
-# HTTP kliens az LLM és külső API hívásokhoz
-reqwest = { version = "0.11", features = ["json"] }
+# HTTP kliens az LLM és külső API hívásokhoz (blocking feature hozzáadva)
+reqwest = { version = "0.11", features = ["json", "blocking"] }
 
 # Adatszerializáció
 serde = { version = "1.0", features = ["derive"] }
@@ -20,3 +20,6 @@ regex = "1.10"
 
 # Környezeti változók (.env)
 dotenvy = "0.15"
+
+# Base64 kódolás a VirusTotal URL azonosítókhoz
+base64 = "0.22"
