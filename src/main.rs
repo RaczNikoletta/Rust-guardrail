@@ -1,4 +1,5 @@
 mod guards;
+mod tools;
 
 use axum::{routing::post, Json, Router};
 use guards::pii_redactor::PiiRedactor;
