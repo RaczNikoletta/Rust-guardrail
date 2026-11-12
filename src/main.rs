@@ -7,6 +7,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use guards::normalize::{fold_homoglyphs, normalize};
 use guards::pii_redactor::PiiRedactor;
 use guards::prompt_injection::PromptInjectionGuard;
 use serde::{Deserialize, Serialize};
@@ -99,17 +100,22 @@ async fn handle_chat(
         }
     }
 
-    // 1. GUARD PHASE: Check for Prompt Injection
+    // 1. NORMALIZE: one canonical form (NFKC, no invisible characters) before any guard runs.
+    // Every later step works on this text, so obfuscation cannot hide anything from them.
+    let normalized = normalize(&payload.prompt);
+
+    // 2. GUARD PHASE: Check for Prompt Injection
+    // Look-alike letters are folded only for this check; the text that is forwarded keeps them.
     // Never log the prompt itself: it is attacker-controlled (log injection) and may hold PII.
-    if state.injection_guard.is_injection(&payload.prompt) {
+    if state.injection_guard.is_injection(&fold_homoglyphs(&normalized)) {
         println!("[ALERT] Prompt injection blocked (prompt length: {} bytes)", payload.prompt.len());
         return reply(StatusCode::FORBIDDEN, "INJECTION_BLOCKED", "[BLOCKED_BY_GUARDRAIL]", true);
     }
 
-    // 2. GUARD PHASE: Sanitize PII
-    let sanitized = state.redactor.redact(&payload.prompt);
+    // 3. GUARD PHASE: Sanitize PII (full-width digits are plain digits by now, so they are caught)
+    let sanitized = state.redactor.redact(&normalized);
 
-    // 3. GUARD PHASE: Check URLs and IP addresses with VirusTotal.
+    // 4. GUARD PHASE: Check URLs and IP addresses with VirusTotal.
     // This runs on the REDACTED text, so PII never leaves the proxy.
     let malicious_urls = state.threat_intel.find_malicious_urls(&sanitized).await;
     if !malicious_urls.is_empty() {
