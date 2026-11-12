@@ -1,67 +1,122 @@
 mod guards;
 mod tools;
 
-use axum::{routing::post, Json, Router};
+use axum::{
+    extract::{DefaultBodyLimit, State},
+    http::{HeaderMap, StatusCode},
+    routing::post,
+    Json, Router,
+};
 use guards::pii_redactor::PiiRedactor;
 use guards::prompt_injection::PromptInjectionGuard;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::{env, net::SocketAddr, sync::Arc};
+use tools::threat_intel::ThreatIntel;
+
+/// Requests larger than this are rejected before they are parsed (HTTP 413).
+const MAX_BODY_BYTES: usize = 16 * 1024;
 
 #[derive(Deserialize)]
 struct ChatRequest {
     prompt: String,
 }
 
+// The raw prompt is deliberately NOT part of the response: it may contain PII.
 #[derive(Serialize)]
 struct ChatResponse {
-    original_prompt: String,
     sanitized_prompt: String,
     status: String,
     blocked: bool,
+}
+
+/// Everything is built once at startup and shared between requests.
+struct AppState {
+    injection_guard: PromptInjectionGuard,
+    redactor: PiiRedactor,
+    threat_intel: ThreatIntel,
+    /// If set, clients must send it in the `x-api-key` header.
+    auth_token: Option<String>,
+}
+
+/// Compares two tokens without stopping at the first different byte (avoids timing leaks).
+fn tokens_match(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+fn reply(code: StatusCode, status: &str, sanitized: &str, blocked: bool) -> (StatusCode, Json<ChatResponse>) {
+    (
+        code,
+        Json(ChatResponse {
+            sanitized_prompt: sanitized.to_string(),
+            status: status.to_string(),
+            blocked,
+        }),
+    )
 }
 
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
 
-    let app = Router::new().route("/v1/chat", post(handle_chat));
+    let auth_token = env::var("GUARDRAIL_TOKEN").ok().filter(|t| !t.is_empty());
+    if auth_token.is_none() {
+        println!("[WARN] GUARDRAIL_TOKEN is not set. Authentication is disabled.");
+    }
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let state = Arc::new(AppState {
+        injection_guard: PromptInjectionGuard::new(),
+        redactor: PiiRedactor::new(),
+        threat_intel: ThreatIntel::new(),
+        auth_token,
+    });
+
+    let app = Router::new()
+        .route("/v1/chat", post(handle_chat))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .with_state(state);
+
+    let port: u16 = env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(3000);
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     println!("🛡️  Rust Guardrail Proxy running on: http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn handle_chat(Json(payload): Json<ChatRequest>) -> Json<ChatResponse> {
-    let injection_guard = PromptInjectionGuard::new();
-    let redactor = PiiRedactor::new();
+async fn handle_chat(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<ChatRequest>,
+) -> (StatusCode, Json<ChatResponse>) {
+    // 0. AUTH: only clients that know the token may use the proxy
+    if let Some(expected) = &state.auth_token {
+        let authorized = headers
+            .get("x-api-key")
+            .and_then(|v| v.to_str().ok())
+            .map_or(false, |given| tokens_match(given, expected));
+        if !authorized {
+            return reply(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", "[UNAUTHORIZED]", true);
+        }
+    }
 
     // 1. GUARD PHASE: Check for Prompt Injection
-    if injection_guard.is_injection(&payload.prompt) {
-        println!("\n🚨 [ALERT] Prompt Injection Attack Intercepted!");
-        println!("  Blocked Prompt: {}\n", payload.prompt);
-
-        return Json(ChatResponse {
-            original_prompt: payload.prompt.clone(),
-            sanitized_prompt: "[BLOCKED_BY_GUARDRAIL]".to_string(),
-            status: "INJECTION_BLOCKED".to_string(),
-            blocked: true,
-        });
+    // Never log the prompt itself: it is attacker-controlled (log injection) and may hold PII.
+    if state.injection_guard.is_injection(&payload.prompt) {
+        println!("[ALERT] Prompt injection blocked (prompt length: {} bytes)", payload.prompt.len());
+        return reply(StatusCode::FORBIDDEN, "INJECTION_BLOCKED", "[BLOCKED_BY_GUARDRAIL]", true);
     }
 
     // 2. GUARD PHASE: Sanitize PII
-    let sanitized = redactor.redact(&payload.prompt);
+    let sanitized = state.redactor.redact(&payload.prompt);
 
-    println!("\n--------------------------------------------------");
-    println!("📥 Incoming Prompt:  {}", payload.prompt);
-    println!("🛡️  Sanitized Prompt: {}", sanitized);
-    println!("--------------------------------------------------\n");
+    // 3. GUARD PHASE: Check URLs with VirusTotal.
+    // This runs on the REDACTED text, so PII never leaves the proxy.
+    let malicious_urls = state.threat_intel.find_malicious_urls(&sanitized).await;
+    if !malicious_urls.is_empty() {
+        println!("[ALERT] Malicious URL blocked ({} found)", malicious_urls.len());
+        return reply(StatusCode::FORBIDDEN, "MALICIOUS_URL_BLOCKED", "[BLOCKED_BY_GUARDRAIL]", true);
+    }
 
-    Json(ChatResponse {
-        original_prompt: payload.prompt,
-        sanitized_prompt: sanitized,
-        status: "PASSED_GUARDRAILS".to_string(),
-        blocked: false,
-    })
+    println!("[INFO] Prompt passed the guardrails (length: {} bytes)", payload.prompt.len());
+    reply(StatusCode::OK, "PASSED_GUARDRAILS", &sanitized, false)
 }
