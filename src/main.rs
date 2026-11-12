@@ -109,12 +109,18 @@ async fn handle_chat(
     // 2. GUARD PHASE: Sanitize PII
     let sanitized = state.redactor.redact(&payload.prompt);
 
-    // 3. GUARD PHASE: Check URLs with VirusTotal.
+    // 3. GUARD PHASE: Check URLs and IP addresses with VirusTotal.
     // This runs on the REDACTED text, so PII never leaves the proxy.
     let malicious_urls = state.threat_intel.find_malicious_urls(&sanitized).await;
     if !malicious_urls.is_empty() {
         println!("[ALERT] Malicious URL blocked ({} found)", malicious_urls.len());
         return reply(StatusCode::FORBIDDEN, "MALICIOUS_URL_BLOCKED", "[BLOCKED_BY_GUARDRAIL]", true);
+    }
+
+    let malicious_ips = state.threat_intel.find_malicious_ips(&sanitized).await;
+    if !malicious_ips.is_empty() {
+        println!("[ALERT] Malicious IP blocked ({} found)", malicious_ips.len());
+        return reply(StatusCode::FORBIDDEN, "MALICIOUS_IP_BLOCKED", "[BLOCKED_BY_GUARDRAIL]", true);
     }
 
     println!("[INFO] Prompt passed the guardrails (length: {} bytes)", payload.prompt.len());
