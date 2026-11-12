@@ -15,10 +15,10 @@ It uses deterministic checks only (regex, checksums and an API lookup). This mak
 | [x] | **Prompt injection guard** | Blocks known jailbreak phrases such as *ignore previous instructions* or *reveal your system prompt* (9 case-insensitive English regex patterns). |
 | [x] | **PII redactor** | Replaces emails, credit card numbers (Luhn checked), Hungarian TAJ numbers (checksum checked) and API keys (OpenAI, GitHub, Slack, Bearer) with `[REDACTED_*]` tokens. |
 | [x] | **Threat intelligence: URLs** | Checks up to 3 URLs per prompt against the VirusTotal API (async). Runs on the already redacted text. |
+| [x] | **Threat intelligence: IP addresses** | Checks up to 3 public IPv4 addresses per prompt against VirusTotal. Private, loopback and invalid addresses are skipped. |
 | [x] | **Request authentication** | Optional shared secret (`GUARDRAIL_TOKEN`) sent in the `x-api-key` header. |
 | [x] | **Safe logging** | The raw prompt is never logged or returned. Logs only contain the prompt length. |
 | [x] | **Request size limit** | Bodies larger than 16 KB are rejected. |
-| [ ] | **Threat intelligence: IP addresses** | Look up IPs found in prompts on VirusTotal (URLs only for now). |
 | [ ] | **Text normalization** | Unicode NFKC and zero-width character removal before the injection check, to stop simple obfuscation. |
 | [ ] | **Gemini API call** | Forward the sanitized prompt to the LLM and return its answer (the proxy currently only returns the sanitized prompt). |
 | [ ] | **Output Canary Guard** | Put a unique canary token into the system context and block responses that leak it. |
@@ -42,7 +42,7 @@ The diagram shows the target design. Steps marked `(TODO)` are not implemented y
 │  0. Auth              ──► x-api-key check              │
 │  1. Input Guard       ──► Prompt Injection Filter      │
 │  2. PII Redactor      ──► Email, Card, TAJ, API keys   │
-│  3. Threat Intel Tool ──► VirusTotal URL lookup        │
+│  3. Threat Intel Tool ──► VirusTotal URL + IP lookup    │
 └───────────────────────────┬────────────────────────────┘
                             │ (Sanitized & Redacted Prompt)
                             ▼
@@ -69,7 +69,7 @@ src/
     prompt_injection.rs     injection regex guard
     pii_redactor.rs         PII and secret redaction (Luhn / TAJ checks)
   tools/
-    threat_intel.rs         VirusTotal URL lookup (async)
+    threat_intel.rs         VirusTotal URL and IP lookup (async)
 ```
 
 ---
@@ -89,9 +89,11 @@ cargo run                   # start the proxy on http://127.0.0.1:3000
 | Variable | Required | Description |
 |---|---|---|
 | `GUARDRAIL_TOKEN` | recommended | Clients must send this value in the `x-api-key` header. If empty, authentication is disabled. |
-| `VIRUSTOTAL_API_KEY` | optional | Enables URL checks. If empty, URL checks are skipped. |
+| `VIRUSTOTAL_API_KEY` | optional | Enables URL and IP checks. If empty, they are skipped. |
 | `PORT` | optional | Listening port (default `3000`). |
 | `GEMINI_API_KEY` | not used yet | Reserved for the Gemini call (TODO). |
+
+Never commit `.env`. It is already listed in `.gitignore`.
 
 ---
 
@@ -120,6 +122,7 @@ Response (200):
 | 401 | `UNAUTHORIZED` | Missing or wrong `x-api-key`. |
 | 403 | `INJECTION_BLOCKED` | Prompt injection pattern detected. |
 | 403 | `MALICIOUS_URL_BLOCKED` | VirusTotal flagged a URL in the prompt. |
+| 403 | `MALICIOUS_IP_BLOCKED` | VirusTotal flagged an IP address in the prompt. |
 | 413 | (empty) | Request body larger than 16 KB. |
 
 ---
@@ -154,8 +157,9 @@ The two approaches are complementary: a fast deterministic layer first, a semant
 
 * The injection guard is a blacklist. Synonyms, other languages, encodings and look-alike Unicode characters can bypass it.
 * Only English injection phrases are covered.
-* Only the first 3 URLs of a prompt are checked. IP addresses are not checked.
-* If VirusTotal cannot be reached, the URL is treated as safe (fail-open).
+* Only the first 3 URLs and the first 3 public IPv4 addresses of a prompt are checked. IPv6 is not checked.
+* Version numbers such as `1.2.3.4` look like IP addresses and are looked up too (harmless, but they use VirusTotal quota).
+* If VirusTotal cannot be reached, the URL or IP is treated as safe (fail-open).
 * PII coverage is limited to emails, cards, TAJ numbers and a few API key formats.
 * No rate limiting, no TLS (run behind a reverse proxy) and the server listens on localhost only.
 
@@ -167,13 +171,12 @@ The two approaches are complementary: a fast deterministic layer first, a semant
 cargo test
 ```
 
-The unit tests cover the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) and URL extraction. Tests for the VirusTotal network call are TODO.
+The unit tests cover the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) and URL and IP extraction. Tests for the VirusTotal network call are TODO.
 
 ---
 
 ## TODO Summary
 
-- [ ] IP address lookup
 - [ ] Text normalization before the injection check
 - [ ] Gemini API call
 - [ ] Output Canary Guard
