@@ -93,8 +93,6 @@ cargo run                   # start the proxy on http://127.0.0.1:3000
 | `PORT` | optional | Listening port (default `3000`). |
 | `GEMINI_API_KEY` | not used yet | Reserved for the Gemini call (TODO). |
 
-Never commit `.env`. It is already listed in `.gitignore`.
-
 ---
 
 ## Usage
