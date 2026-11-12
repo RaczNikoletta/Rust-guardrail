@@ -23,3 +23,6 @@ dotenvy = "0.15"
 
 # Base64 kódolás a VirusTotal URL azonosítókhoz
 base64 = "0.22"
+
+# Unicode normalization (NFKC) before the prompt filtering
+unicode-normalization = "0.1"
