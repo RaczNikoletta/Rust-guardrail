@@ -19,7 +19,7 @@ It uses deterministic checks only (regex, checksums and an API lookup). This mak
 | [x] | **Request authentication** | Optional shared secret (`GUARDRAIL_TOKEN`) sent in the `x-api-key` header. |
 | [x] | **Safe logging** | The raw prompt is never logged or returned. Logs only contain the prompt length. |
 | [x] | **Request size limit** | Bodies larger than 16 KB are rejected. |
-| [ ] | **Text normalization** | Unicode NFKC and zero-width character removal before the injection check, to stop simple obfuscation. |
+| [x] | **Text normalization** | Unicode NFKC and removal of zero-width / control characters before every guard. Look-alike Cyrillic and Greek letters are folded to Latin for the injection check only. |
 | [ ] | **Gemini API call** | Forward the sanitized prompt to the LLM and return its answer (the proxy currently only returns the sanitized prompt). |
 | [ ] | **Output Canary Guard** | Put a unique canary token into the system context and block responses that leak it. |
 | [ ] | **Incident audit log** | Append a structured JSON record (timestamp, guard, reason, prompt hash, never the raw prompt) for every blocked request. |
@@ -40,9 +40,10 @@ The diagram shows the target design. Steps marked `(TODO)` are not implemented y
 │                RUST GUARDRAIL PROXY                    │
 │                                                        │
 │  0. Auth              ──► x-api-key check              │
-│  1. Input Guard       ──► Prompt Injection Filter      │
-│  2. PII Redactor      ──► Email, Card, TAJ, API keys   │
-│  3. Threat Intel Tool ──► VirusTotal URL + IP lookup    │
+│  1. Normalizer        ──► NFKC, invisible chars removed│
+│  2. Input Guard       ──► Prompt Injection Filter      │
+│  3. PII Redactor      ──► Email, Card, TAJ, API keys   │
+│  4. Threat Intel Tool ──► VirusTotal URL + IP lookup   │
 └───────────────────────────┬────────────────────────────┘
                             │ (Sanitized & Redacted Prompt)
                             ▼
@@ -52,8 +53,8 @@ The diagram shows the target design. Steps marked `(TODO)` are not implemented y
                             │ (Raw Model Response)
                             ▼
 ┌────────────────────────────────────────────────────────┐
-│  4. Output Guard      ──► Canary Token Filter  (TODO)  │
-│  5. Audit Skill       ──► Incident Log         (TODO)  │
+│  5. Output Guard      ──► Canary Token Filter  (TODO)  │
+│  6. Audit Skill       ──► Incident Log         (TODO)  │
 └───────────────────────────┬────────────────────────────┘
                             │ (Safe Response / Audit Log)
                             ▼
@@ -66,6 +67,7 @@ Project layout:
 src/
   main.rs                   HTTP server, auth, request pipeline
   guards/
+    normalize.rs            Unicode normalization and homoglyph folding
     prompt_injection.rs     injection regex guard
     pii_redactor.rs         PII and secret redaction (Luhn / TAJ checks)
   tools/
@@ -129,6 +131,7 @@ Response (200):
 
 ## Security Design Decisions
 
+* **Normalize first:** all guards see the same canonical text, so zero-width characters, full-width letters or look-alike letters cannot hide an attack from one guard but not another.
 * **No raw prompt in logs or responses:** prompts may contain PII and are attacker-controlled (log injection).
 * **Redact before any external call:** the VirusTotal lookup only sees the redacted text.
 * **Checksums reduce false positives:** a 16-digit order number is not redacted unless it passes the Luhn check; the same applies to TAJ numbers.
@@ -155,7 +158,9 @@ The two approaches are complementary: a fast deterministic layer first, a semant
 
 ## Known Limitations
 
-* The injection guard is a blacklist. Synonyms, other languages, encodings and look-alike Unicode characters can bypass it.
+* The injection guard is a blacklist. Synonyms, other languages and encodings (e.g. Base64) can bypass it.
+* Homoglyph folding covers only common Cyrillic and Greek look-alikes, not the full Unicode confusables table.
+* The text that is forwarded is the normalized prompt, so the original bytes (zero-width joiners in emoji, decomposed accents) are not preserved.
 * Only English injection phrases are covered.
 * Only the first 3 URLs and the first 3 public IPv4 addresses of a prompt are checked. IPv6 is not checked.
 * Version numbers such as `1.2.3.4` look like IP addresses and are looked up too (harmless, but they use VirusTotal quota).
@@ -171,13 +176,12 @@ The two approaches are complementary: a fast deterministic layer first, a semant
 cargo test
 ```
 
-The unit tests cover the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) and URL and IP extraction. Tests for the VirusTotal network call are TODO.
+The unit tests cover normalization (zero-width, full-width and look-alike characters), the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) and URL and IP extraction. Tests for the VirusTotal network call are TODO.
 
 ---
 
 ## TODO Summary
 
-- [ ] Text normalization before the injection check
 - [ ] Gemini API call
 - [ ] Output Canary Guard
 - [ ] Incident audit log
