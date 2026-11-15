@@ -8,6 +8,7 @@ use axum::{
     Json, Router,
 };
 use guards::normalize::{fold_homoglyphs, normalize};
+use guards::output_canary::OutputCanaryGuard;
 use guards::pii_redactor::PiiRedactor;
 use guards::prompt_injection::PromptInjectionGuard;
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,7 @@ struct ChatResponse {
 struct AppState {
     injection_guard: PromptInjectionGuard,
     redactor: PiiRedactor,
+    canary_guard: OutputCanaryGuard,
     threat_intel: ThreatIntel,
     gemini: GeminiClient,
     /// If set, clients must send it in the `x-api-key` header.
@@ -72,6 +74,7 @@ async fn main() {
     let state = Arc::new(AppState {
         injection_guard: PromptInjectionGuard::new(),
         redactor: PiiRedactor::new(),
+        canary_guard: OutputCanaryGuard::new(),
         threat_intel: ThreatIntel::new(),
         gemini: GeminiClient::new(),
         auth_token,
@@ -138,8 +141,9 @@ async fn handle_chat(
     println!("[INFO] Prompt passed the guardrails (length: {} bytes)", payload.prompt.len());
 
     // 5. LLM CALL: only the sanitized text is ever sent to Gemini.
+    // The canary is hidden in the system instruction of this call.
     let answer = if state.gemini.is_enabled() {
-        match state.gemini.generate(&sanitized).await {
+        match state.gemini.generate(&sanitized, state.canary_guard.canary()).await {
             Ok(text) => Some(text),
             Err(e) => {
                 println!("[ERROR] Gemini call failed: {}", e);
@@ -150,6 +154,15 @@ async fn handle_chat(
     } else {
         None
     };
+
+    // 6. OUTPUT GUARD: if the answer contains the canary, the model leaked its instructions.
+    // The answer is dropped; it is not logged either.
+    if let Some(text) = &answer {
+        if state.canary_guard.leaks(text) {
+            println!("[ALERT] Canary found in the model's answer, answer blocked");
+            return reply(StatusCode::FORBIDDEN, "OUTPUT_BLOCKED", "[BLOCKED_BY_GUARDRAIL]", true);
+        }
+    }
 
     (
         StatusCode::OK,
