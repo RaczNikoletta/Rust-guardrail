@@ -21,7 +21,7 @@ It uses deterministic checks only (regex, checksums and an API lookup). This mak
 | [x] | **Request size limit** | Bodies larger than 16 KB are rejected. |
 | [x] | **Text normalization** | Unicode NFKC and removal of zero-width / control characters before every guard. Look-alike Cyrillic and Greek letters are folded to Latin for the injection check only. |
 | [x] | **Gemini API call** | Sends the sanitized prompt (never the raw one) to Gemini and returns the answer in the `answer` field. Skipped if `GEMINI_API_KEY` is empty. |
-| [ ] | **Output Canary Guard** | Put a unique canary token into the system context and block responses that leak it. |
+| [x] | **Output Canary Guard** | A random canary token is hidden in the system instruction of every Gemini call. If it appears in the answer (even spaced out or with invisible characters), the answer is blocked. |
 | [ ] | **Incident audit log** | Append a structured JSON record (timestamp, guard, reason, prompt hash, never the raw prompt) for every blocked request. |
 | [ ] | **Rate limiting** | Limit the number of requests per client. |
 | [ ] | **Benchmark** | Measure detection rate, false positives and latency on a small attack / benign prompt set. |
@@ -53,7 +53,7 @@ The diagram shows the target design. Steps marked `(TODO)` are not implemented y
                             │ (Raw Model Response)
                             ▼
 ┌────────────────────────────────────────────────────────┐
-│  5. Output Guard      ──► Canary Token Filter  (TODO)  │
+│  5. Output Guard      ──► Canary Token Filter          │
 │  6. Audit Skill       ──► Incident Log         (TODO)  │
 └───────────────────────────┬────────────────────────────┘
                             │ (Safe Response / Audit Log)
@@ -70,6 +70,7 @@ src/
     normalize.rs            Unicode normalization and homoglyph folding
     prompt_injection.rs     injection regex guard
     pii_redactor.rs         PII and secret redaction (Luhn / TAJ checks)
+    output_canary.rs        canary token check on the model's answer
   tools/
     threat_intel.rs         VirusTotal URL and IP lookup (async)
     gemini.rs               Gemini API client (async)
@@ -128,6 +129,7 @@ Response (200):
 | 403 | `INJECTION_BLOCKED` | Prompt injection pattern detected. |
 | 403 | `MALICIOUS_URL_BLOCKED` | VirusTotal flagged a URL in the prompt. |
 | 403 | `MALICIOUS_IP_BLOCKED` | VirusTotal flagged an IP address in the prompt. |
+| 403 | `OUTPUT_BLOCKED` | The model's answer contained the secret canary (instruction leak). |
 | 413 | (empty) | Request body larger than 16 KB. |
 | 502 | `LLM_ERROR` | The Gemini call failed (network error, timeout, API error or no answer). |
 
@@ -169,7 +171,7 @@ The two approaches are complementary: a fast deterministic layer first, a semant
 * Only the first 3 URLs and the first 3 public IPv4 addresses of a prompt are checked. IPv6 is not checked.
 * Version numbers such as `1.2.3.4` look like IP addresses and are looked up too (harmless, but they use VirusTotal quota).
 * If VirusTotal cannot be reached, the URL or IP is treated as safe (fail-open).
-* The model's answer is returned as it is: there is no output check yet (see the Output Canary Guard TODO).
+* The model's answer is checked only for the canary. Other harmful content in the answer is not detected, and an answer that encodes the canary (e.g. Base64) or only repeats a part of the instructions passes.
 * Every request is a single turn: there is no conversation history. If the Gemini call fails, the request is not retried.
 * PII coverage is limited to emails, cards, TAJ numbers and a few API key formats.
 * No rate limiting, no TLS (run behind a reverse proxy) and the server listens on localhost only.
@@ -182,13 +184,12 @@ The two approaches are complementary: a fast deterministic layer first, a semant
 cargo test
 ```
 
-The unit tests cover normalization (zero-width, full-width and look-alike characters), the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) URL and IP extraction, and the Gemini request and response handling. Tests for the real VirusTotal and Gemini network calls are TODO (they need API keys).
+The unit tests cover normalization (zero-width, full-width and look-alike characters), the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) URL and IP extraction, the Gemini request and response handling, and the canary guard. Tests for the real VirusTotal and Gemini network calls are TODO (they need API keys).
 
 ---
 
 ## TODO Summary
 
-- [ ] Output Canary Guard
 - [ ] Incident audit log
 - [ ] Rate limiting
 - [ ] Benchmark against a prompt set (and NeMo, if time allows)
