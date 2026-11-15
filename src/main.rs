@@ -12,6 +12,7 @@ use guards::pii_redactor::PiiRedactor;
 use guards::prompt_injection::PromptInjectionGuard;
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr, sync::Arc};
+use tools::gemini::GeminiClient;
 use tools::threat_intel::ThreatIntel;
 
 /// Requests larger than this are rejected before they are parsed (HTTP 413).
@@ -28,6 +29,8 @@ struct ChatResponse {
     sanitized_prompt: String,
     status: String,
     blocked: bool,
+    /// The LLM's answer. `null` if the prompt was blocked or the LLM call is disabled.
+    answer: Option<String>,
 }
 
 /// Everything is built once at startup and shared between requests.
@@ -35,6 +38,7 @@ struct AppState {
     injection_guard: PromptInjectionGuard,
     redactor: PiiRedactor,
     threat_intel: ThreatIntel,
+    gemini: GeminiClient,
     /// If set, clients must send it in the `x-api-key` header.
     auth_token: Option<String>,
 }
@@ -51,6 +55,7 @@ fn reply(code: StatusCode, status: &str, sanitized: &str, blocked: bool) -> (Sta
             sanitized_prompt: sanitized.to_string(),
             status: status.to_string(),
             blocked,
+            answer: None,
         }),
     )
 }
@@ -68,6 +73,7 @@ async fn main() {
         injection_guard: PromptInjectionGuard::new(),
         redactor: PiiRedactor::new(),
         threat_intel: ThreatIntel::new(),
+        gemini: GeminiClient::new(),
         auth_token,
     });
 
@@ -130,5 +136,28 @@ async fn handle_chat(
     }
 
     println!("[INFO] Prompt passed the guardrails (length: {} bytes)", payload.prompt.len());
-    reply(StatusCode::OK, "PASSED_GUARDRAILS", &sanitized, false)
+
+    // 5. LLM CALL: only the sanitized text is ever sent to Gemini.
+    let answer = if state.gemini.is_enabled() {
+        match state.gemini.generate(&sanitized).await {
+            Ok(text) => Some(text),
+            Err(e) => {
+                println!("[ERROR] Gemini call failed: {}", e);
+                // 502: the proxy worked, but the service behind it did not
+                return reply(StatusCode::BAD_GATEWAY, "LLM_ERROR", &sanitized, false);
+            }
+        }
+    } else {
+        None
+    };
+
+    (
+        StatusCode::OK,
+        Json(ChatResponse {
+            sanitized_prompt: sanitized,
+            status: "PASSED_GUARDRAILS".to_string(),
+            blocked: false,
+            answer,
+        }),
+    )
 }
