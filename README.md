@@ -4,7 +4,7 @@
 
 It uses deterministic checks only (regex, checksums and an API lookup). This makes it cheap (no extra LLM calls for guarding), predictable and easy to unit test. It is a university project and a first line of defense, not a replacement for full frameworks such as NVIDIA NeMo Guardrails (see [Comparison](#comparison-with-nemo-guardrails)).
 
-> **Status legend:** [x] implemented | [ ] TODO (planned, not implemented yet)
+> **Status legend:** [x] implemented | [ ] TODO (planned, not implemented yet) | [~] optional extension / future work (not part of the core assignment, not implemented yet)
 
 ---
 
@@ -25,6 +25,7 @@ It uses deterministic checks only (regex, checksums and an API lookup). This mak
 | [ ] | **Incident audit log** | Append a structured JSON record (timestamp, guard, reason, prompt hash, never the raw prompt) for every blocked request. |
 | [ ] | **Rate limiting** | Limit the number of requests per client. |
 | [ ] | **Benchmark** | Measure detection rate, false positives and latency on a small attack / benign prompt set. |
+| [~] | **File upload guard** (optional extension) | Check uploaded text files (size, extension, file name, UTF-8) and run their content through the same guards as a prompt (normalization, injection, PII). Look up the SHA-256 hash on VirusTotal without uploading the file. See [Future Work](#future-work-not-part-of-the-core-assignment). |
 
 ---
 
@@ -175,6 +176,31 @@ The two approaches are complementary: a fast deterministic layer first, a semant
 * Every request is a single turn: there is no conversation history. If the Gemini call fails, the request is not retried.
 * PII coverage is limited to emails, cards, TAJ numbers and a few API key formats.
 * No rate limiting, no TLS (run behind a reverse proxy) and the server listens on localhost only.
+* Only the chat prompt is checked. Uploaded files are not supported yet (see Future Work).
+
+---
+
+## Future Work (not part of the core assignment)
+
+Nothing in this section is implemented. It is marked `[~]` and is meant as an optional extension or as a direction for continuing the project.
+
+**File upload guard.** Uploaded documents are a main route of *indirect prompt injection*: the attack is hidden in the file, not typed into the chat. The model reads the file content as part of the prompt, so the existing guards are useful here too.
+
+| Check | What it catches | Effort |
+|---|---|---|
+| Size limit | huge files, memory use | easy |
+| Extension allowlist (`.txt`, `.md`, `.csv`) | dangerous types (`.exe`, `.js`) | easy |
+| File name cleaning (`../`, `\`, double extensions such as `image.jpg.exe`) | path traversal | easy |
+| UTF-8 check for text files | binary garbage, encoding tricks | easy |
+| Content through the existing guards (normalize, injection, PII) | hidden instructions, personal data inside the document | easy, if the guard steps are moved into one shared function |
+| Magic bytes vs. extension | a renamed file (an `.exe` pretending to be `.txt`) | medium |
+| SHA-256 hash lookup on VirusTotal (`GET /files/{hash}`) | known malicious files. Only the hash leaves the proxy, not the file | medium |
+| PDF / Office text extraction, macro detection (`vbaProject.bin`), zip-bomb limits, hidden text, OCR | complex attacks | hard |
+
+Suggested scope:
+
+* **Optional extension:** text files only (`.txt`, `.md`, `.csv`), with the checks marked easy plus the hash lookup. This needs the axum `multipart` feature, a SHA-256 crate, a new `POST /v1/upload` endpoint and a shared `run_guards()` function used by both endpoints.
+* **Continuing the project:** everything else in the table (PDF / Office, archives, OCR).
 
 ---
 
@@ -193,3 +219,4 @@ The unit tests cover normalization (zero-width, full-width and look-alike charac
 - [ ] Incident audit log
 - [ ] Rate limiting
 - [ ] Benchmark against a prompt set (and NeMo, if time allows)
+- [~] File upload guard (optional extension, see Future Work)
