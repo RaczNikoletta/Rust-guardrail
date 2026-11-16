@@ -147,6 +147,31 @@ Response (200):
 
 ---
 
+## Why Rust?
+
+The proxy parses attacker-controlled text and sits on the critical path of every request, so the choice of language matters.
+
+* **Memory safety without a garbage collector.** Buffer overflows and use-after-free (a common vulnerability class in C/C++) are ruled out at compile time. The project contains no `unsafe` code.
+* **Data-race freedom.** State shared between concurrent requests (`Arc<AppState>`) must be thread-safe, otherwise the code does not compile.
+* **Errors are part of the type system.** `Option` and `Result` force the code to handle missing fields (for example a blocked Gemini answer) and failed network calls. There are no null pointers.
+* **ReDoS-resistant regex.** The `regex` crate matches in linear time, so a crafted prompt cannot freeze the guards. Trade-off: no lookaround and no backreferences.
+* **Low, predictable overhead.** No GC pauses and a single static binary (no runtime to install). Measured numbers are TODO (see Benchmark).
+
+| | Rust | C++ | Go | Python | Java / C# |
+|---|---|---|---|---|---|
+| Memory safety | compile time | no | yes (GC) | yes (GC) | yes (GC) |
+| Data races | rejected by the compiler | possible | runtime race detector | logic errors possible | runtime |
+| Missing value / errors | `Option` / `Result`, enforced | `nullptr`, exceptions | `nil`, `error` convention | `None`, exceptions | `null`, exceptions |
+| Regex engine | linear time (crate) | library dependent | linear time | backtracking (ReDoS risk) | backtracking by default |
+| GC pauses | none | none | yes | yes | yes |
+| Runtime needed | no | no | small (built in) | yes | yes |
+| AI / NLP ecosystem | weak | weak | weak | **excellent** | medium |
+| Learning curve | **steep** | steep | gentle | gentle | medium |
+
+**Trade-offs.** Rust has a steeper learning curve and slower prototyping than Python, and a much weaker AI/NLP ecosystem. This is why semantic detection is out of scope and a hybrid design with a Python layer is suggested (see the comparison below). Rust does not fix logic flaws: the blacklist-based injection guard is as bypassable in Rust as in any other language, and security details such as the constant-time token comparison still have to be written by hand. Go would also have been a reasonable choice (memory safe, simple, good HTTP support); Rust was preferred for its type system and the absence of a GC.
+
+---
+
 ## Comparison with NeMo Guardrails
 
 | Aspect | Rust Guardrail | NeMo Guardrails |
