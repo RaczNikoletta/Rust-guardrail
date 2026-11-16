@@ -234,6 +234,11 @@ Suggested scope:
 ```powershell
 cargo test
 ```
+<img width="1423" height="274" alt="image" src="https://github.com/user-attachments/assets/2f591717-a450-4891-bb57-054cc383b4fe" />
+<img width="1475" height="401" alt="image" src="https://github.com/user-attachments/assets/ab286642-5c8b-490c-8df6-c68f3f6788b1" />
+<img width="1507" height="263" alt="image" src="https://github.com/user-attachments/assets/39f6e932-b983-4626-a322-0527e15477e6" />
+<img width="1473" height="374" alt="image" src="https://github.com/user-attachments/assets/535f6099-e0ae-4062-befc-c8356ef465b1" />
+
 
 The unit tests cover normalization (zero-width, full-width and look-alike characters), the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) URL and IP extraction, the Gemini request and response handling, and the canary guard. Tests for the real VirusTotal and Gemini network calls are TODO (they need API keys).
 
