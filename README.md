@@ -240,7 +240,7 @@ cargo test
 <img width="1473" height="374" alt="image" src="https://github.com/user-attachments/assets/535f6099-e0ae-4062-befc-c8356ef465b1" />
 
 
-The unit tests cover normalization (zero-width, full-width and look-alike characters), the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) URL and IP extraction, the Gemini request and response handling, and the canary guard. Tests for the real VirusTotal and Gemini network calls are TODO (they need API keys).
+The unit tests cover normalization (zero-width, full-width and look-alike characters), the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) URL and IP extraction, the Gemini request and response handling, and the canary guard.
 
 ---
 
