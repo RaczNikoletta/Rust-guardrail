@@ -24,7 +24,7 @@ It uses deterministic checks only (regex, checksums and an API lookup). This mak
 | [x] | **Output Canary Guard** | A random canary token is hidden in the system instruction of every Gemini call. If it appears in the answer (even spaced out or with invisible characters), the answer is blocked. |
 | [ ] | **Incident audit log** | Append a structured JSON record (timestamp, guard, reason, prompt hash, never the raw prompt) for every blocked request. |
 | [ ] | **Rate limiting** | Limit the number of requests per client. |
-| [ ] | **Benchmark** | Measure detection rate, false positives and latency on a small attack / benign prompt set. |
+| [x] | **Benchmark script** | `benchmark/run_benchmark.py` (Python, standard library only) sends 57 prompts to a running proxy and reports the detection rate per attack category, PII redaction, false positives and latency. The measured results are still TODO (see [Benchmark](#benchmark)). |
 | [~] | **File upload guard** (optional extension) | Check uploaded text files (size, extension, file name, UTF-8) and run their content through the same guards as a prompt (normalization, injection, PII). Look up the SHA-256 hash on VirusTotal without uploading the file. See [Future Work](#future-work-not-part-of-the-core-assignment). |
 
 ---
@@ -75,6 +75,8 @@ src/
   tools/
     threat_intel.rs         VirusTotal URL and IP lookup (async)
     gemini.rs               Gemini API client (async)
+benchmark/
+  run_benchmark.py          Python benchmark script (talks to the proxy over HTTP)
 ```
 
 ---
@@ -244,9 +246,37 @@ The unit tests cover normalization (zero-width, full-width and look-alike charac
 
 ---
 
+## Benchmark
+
+The benchmark is a separate Python script. It only talks to the proxy over HTTP, so the Rust code is not touched and no `pip install` is needed.
+
+```powershell
+cargo run                                # terminal 1: start the proxy
+python benchmark/run_benchmark.py        # terminal 2: run the benchmark
+```
+
+Options: `--url` (default `http://127.0.0.1:3000/v1/chat`), `--token` (default: `GUARDRAIL_TOKEN` from the environment or `.env`), `--delay` (seconds between requests, useful against Gemini rate limits), `--timeout`.
+
+For guard-only latency, leave `GEMINI_API_KEY` empty in `.env` while benchmarking. Otherwise every prompt that passes the guards also waits for the Gemini answer. The prompts contain no URLs or IP addresses, so VirusTotal quota is not used.
+
+| Group | Prompts | Counted as correct when |
+|---|---|---|
+| Attacks: `direct` | 10, one per injection pattern | the request is blocked |
+| Attacks: `obfuscated` | 8, the same attacks hidden with upper case, extra whitespace, zero-width or soft-hyphen characters, full-width letters, Cyrillic look-alikes | the request is blocked |
+| Attacks: `paraphrase` | 9, other words, Hungarian and French, Base64, leetspeak, a punctuated phrase, role play | the request is blocked. **Most are expected to be missed**: the guard is a blacklist, and the benchmark shows this on purpose. |
+| PII | 10: email, card, TAJ, three key formats, full-width digits, a hidden zero-width space, a mixed prompt | not blocked, and the secret is gone from `sanitized_prompt` |
+| Benign: `normal` | 12, English and Hungarian | not blocked and returned unchanged |
+| Benign: `tricky` | 8, close to the attack patterns or looking like PII (git blame, order numbers, dates, version numbers) | not blocked and returned unchanged. One prompt that quotes an attack phrase is a known false positive. |
+
+The script prints one line per prompt, then the rates per group, the false positives, the prompts that were altered by mistake, and the latency (median, p95, max; blocked requests alone give the pure guard time because they never reach Gemini or VirusTotal). The full results are saved to `benchmark/results.json`.
+
+**Results: TODO.** Run the script and paste the table here. The test set is small and written by the author, so the numbers describe this prototype on these prompts only, not detection quality in general.
+
+---
+
 ## TODO Summary
 
 - [ ] Incident audit log
 - [ ] Rate limiting
-- [ ] Benchmark against a prompt set (and NeMo, if time allows)
+- [ ] Run the benchmark and add the measured numbers to this README (the script is ready; NeMo comparison only if time allows)
 - [~] File upload guard (optional extension, see Future Work)
