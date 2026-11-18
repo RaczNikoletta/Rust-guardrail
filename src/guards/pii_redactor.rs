@@ -1,8 +1,17 @@
 use regex::{Captures, Regex};
 
 /// Luhn checksum: real card numbers pass it, random digit strings (order numbers, IDs) mostly do not.
-fn luhn_valid(digits: &str) -> bool {
-    let digits: Vec<u32> = digits.chars().filter_map(|c| c.to_digit(10)).collect();
+fn luhn_valid(input: &str) -> bool {
+    // Reject any non-digit character instead of silently ignoring it.
+    let digits: Vec<u32> =  match input
+    .chars()
+    .map(|c| c.to_digit(10)).
+    collect::<Option<Vec<u32>>>()
+    {
+        Some(digits) => digits,
+        None => return false,
+    };
+    
     if !(13..=16).contains(&digits.len()) {
         return false;
     }
@@ -10,16 +19,21 @@ fn luhn_valid(digits: &str) -> bool {
         .iter()
         .rev()
         .enumerate()
-        .map(|(i, &d)| {
-            if i % 2 == 1 {
-                let doubled = d * 2;
-                if doubled > 9 { doubled - 9 } else { doubled }
+        .map(|(index, &digit)| {
+            if index % 2 == 1 {
+                let doubled = digit * 2;
+                if doubled > 9 { 
+                    doubled - 9 
+                } else { 
+                    doubled 
+                }
             } else {
-                d
+                digit
             }
         })
         .sum();
-    sum % 10 == 0
+    //A valaid Luhn checksum must be divisible by 10
+    sum.is_multiple_of(10)
 }
 
 /// Hungarian TAJ checksum: digits 1-8 are weighted 3,7,3,7,... and the sum mod 10 must equal digit 9.
