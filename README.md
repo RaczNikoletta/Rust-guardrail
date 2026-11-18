@@ -22,7 +22,8 @@ It uses deterministic checks only (regex, checksums and an API lookup). This mak
 | [x] | **Text normalization** | Unicode NFKC and removal of zero-width / control characters before every guard. Look-alike Cyrillic and Greek letters are folded to Latin for the injection check only. |
 | [x] | **Gemini API call** | Sends the sanitized prompt (never the raw one) to Gemini and returns the answer in the `answer` field. Skipped if `GEMINI_API_KEY` is empty. |
 | [x] | **Output Canary Guard** | A random canary token is hidden in the system instruction of every Gemini call. If it appears in the answer (even spaced out or with invisible characters), the answer is blocked. |
-| [ ] | **Incident audit log** | Append a structured JSON record (timestamp, guard, reason, prompt hash, never the raw prompt) for every blocked request. |
+| [x] | **Incident audit log** | `src/tools/audit.rs` appends one JSON line (timestamp, guard, status, prompt length, SHA-256 of the prompt, never the raw prompt) to `audit.jsonl` for every blocked request. |
+| [x] | **Incident report skill** | `audit/report.py` reads the log, computes statistics and asks Gemini to write a short incident report from the aggregated numbers (definition in `skills/incident-audit/SKILL.md`). |
 | [ ] | **Rate limiting** | Limit the number of requests per client. |
 | [x] | **Benchmark script** | `benchmark/run_benchmark.py` (Python, standard library only) sends 57 prompts to a running proxy and reports the detection rate per attack category, PII redaction, false positives and latency. The measured results are still TODO (see [Benchmark](#benchmark)). |
 | [~] | **File upload guard** (optional extension) | Check uploaded text files (size, extension, file name, UTF-8) and run their content through the same guards as a prompt (normalization, injection, PII). Look up the SHA-256 hash on VirusTotal without uploading the file. See [Future Work](#future-work-not-part-of-the-core-assignment). |
@@ -31,7 +32,7 @@ It uses deterministic checks only (regex, checksums and an API lookup). This mak
 
 ## System Architecture
 
-The diagram shows the target design. Steps marked `(TODO)` are not implemented yet.
+The diagram shows the design. Steps marked `(TODO)` are not implemented yet (currently none).
 
 ```text
 [ Client / User ]
@@ -55,7 +56,7 @@ The diagram shows the target design. Steps marked `(TODO)` are not implemented y
                             ▼
 ┌────────────────────────────────────────────────────────┐
 │  5. Output Guard      ──► Canary Token Filter          │
-│  6. Audit Skill       ──► Incident Log         (TODO)  │
+│  6. Audit Skill       ──► audit.jsonl + report         │
 └───────────────────────────┬────────────────────────────┘
                             │ (Safe Response / Audit Log)
                             ▼
@@ -75,6 +76,11 @@ src/
   tools/
     threat_intel.rs         VirusTotal URL and IP lookup (async)
     gemini.rs               Gemini API client (async)
+    audit.rs                incident audit log (JSON Lines, append only)
+audit/
+  report.py                 incident report skill (statistics + Gemini report)
+skills/
+  incident-audit/SKILL.md   skill definition
 benchmark/
   run_benchmark.py          Python benchmark script (talks to the proxy over HTTP)
 ```
@@ -100,6 +106,7 @@ cargo run                   # start the proxy on http://127.0.0.1:3000
 | `PORT` | optional | Listening port (default `3000`). |
 | `GEMINI_API_KEY` | optional | Enables the Gemini call. If empty, prompts are only guarded and `answer` is `null`. |
 | `GEMINI_MODEL` | optional | Gemini model name (default `gemini-2.5-flash`). |
+| `AUDIT_LOG_PATH` | optional | Incident log file (default `audit.jsonl`). |
 
 Never commit `.env`. It is already listed in `.gitignore`.
 
@@ -135,6 +142,38 @@ Response (200):
 | 403 | `OUTPUT_BLOCKED` | The model's answer contained the secret canary (instruction leak). |
 | 413 | (empty) | Request body larger than 16 KB. |
 | 502 | `LLM_ERROR` | The Gemini call failed (network error, timeout, API error or no answer). |
+
+---
+
+## Incident Audit Log and Report Skill
+
+Every request blocked by a guard (injection, malicious URL, malicious IP, canary leak) is appended as one line to `audit.jsonl`:
+
+```json
+{"ts_unix":1700000000,"guard":"injection","status":"INJECTION_BLOCKED","http":403,"prompt_len":30,"prompt_sha256":"ca97...","detail":"pattern match"}
+```
+
+| Field | Meaning |
+|---|---|
+| `ts_unix` | Time in seconds since 1970-01-01 UTC. |
+| `guard` | Which guard fired (`injection`, `malicious_url`, `malicious_ip`, `output_canary`). |
+| `status` | The status string the client received. |
+| `http` | HTTP status code. |
+| `prompt_len` | Length of the normalized prompt in bytes. |
+| `prompt_sha256` | SHA-256 fingerprint of the normalized prompt. The same attack sent twice gives the same hash. |
+| `detail` | Short reason written by the code (counts or lengths), never user text. |
+
+The raw prompt and the model's answer are never stored. A failed log write only prints a warning; it never stops the proxy.
+
+The report skill reads the log and writes a summary:
+
+```powershell
+python benchmark/run_benchmark.py        # create some incidents
+python audit/report.py                   # statistics + Gemini report (needs GEMINI_API_KEY)
+python audit/report.py --no-llm          # statistics only
+```
+
+The script skips malformed lines and sends only aggregated numbers to Gemini, never single records.
 
 ---
 
@@ -204,6 +243,9 @@ The two approaches are complementary: a fast deterministic layer first, a semant
 * PII coverage is limited to emails, cards, TAJ numbers and a few API key formats.
 * No rate limiting, no TLS (run behind a reverse proxy) and the server listens on localhost only.
 * Only the chat prompt is checked. Uploaded files are not supported yet (see Future Work).
+* The audit log has no tamper protection (no hash chain or signature). It is one local file with a 5 MB limit and no rotation; when it is full, new incidents are not written.
+* The prompt hash is a plain SHA-256, so a short or guessable prompt could be recovered by brute force. Treat the log as sensitive.
+* Failed logins (401) are not logged on purpose, so unauthenticated callers cannot fill the disk.
 
 ---
 
@@ -242,7 +284,7 @@ cargo test
 <img width="1473" height="374" alt="image" src="https://github.com/user-attachments/assets/535f6099-e0ae-4062-befc-c8356ef465b1" />
 
 
-The unit tests cover normalization (zero-width, full-width and look-alike characters), the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) URL and IP extraction, the Gemini request and response handling, and the canary guard.
+The unit tests cover normalization (zero-width, full-width and look-alike characters), the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) URL and IP extraction, the Gemini request and response handling, the canary guard, and the audit log (hashing, one-line JSON records, appending and the size limit).
 
 ---
 
@@ -276,7 +318,6 @@ The script prints one line per prompt, then the rates per group, the false posit
 
 ## TODO Summary
 
-- [ ] Incident audit log
 - [ ] Rate limiting
 - [ ] Run the benchmark and add the measured numbers to this README (the script is ready; NeMo comparison only if time allows)
 - [~] File upload guard (optional extension, see Future Work)
