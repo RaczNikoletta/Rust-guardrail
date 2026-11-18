@@ -13,6 +13,7 @@ use guards::pii_redactor::PiiRedactor;
 use guards::prompt_injection::PromptInjectionGuard;
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr, sync::Arc};
+use tools::audit::AuditLog;
 use tools::gemini::GeminiClient;
 use tools::threat_intel::ThreatIntel;
 
@@ -41,6 +42,7 @@ struct AppState {
     canary_guard: OutputCanaryGuard,
     threat_intel: ThreatIntel,
     gemini: GeminiClient,
+    audit: AuditLog,
     /// If set, clients must send it in the `x-api-key` header.
     auth_token: Option<String>,
 }
@@ -62,6 +64,19 @@ fn reply(code: StatusCode, status: &str, sanitized: &str, blocked: bool) -> (Sta
     )
 }
 
+/// Every guard block goes through here: write the audit record, then answer 403.
+/// `prompt` is the normalized prompt; the audit log keeps only its length and hash.
+async fn block(
+    state: &AppState,
+    prompt: &str,
+    guard: &'static str,
+    status: &'static str,
+    detail: String,
+) -> (StatusCode, Json<ChatResponse>) {
+    state.audit.record(guard, status, 403, prompt, detail).await;
+    reply(StatusCode::FORBIDDEN, status, "[BLOCKED_BY_GUARDRAIL]", true)
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
@@ -77,6 +92,7 @@ async fn main() {
         canary_guard: OutputCanaryGuard::new(),
         threat_intel: ThreatIntel::new(),
         gemini: GeminiClient::new(),
+        audit: AuditLog::new(),
         auth_token,
     });
 
@@ -98,7 +114,9 @@ async fn handle_chat(
     headers: HeaderMap,
     Json(payload): Json<ChatRequest>,
 ) -> (StatusCode, Json<ChatResponse>) {
-    // 0. AUTH: only clients that know the token may use the proxy
+    // 0. AUTH: only clients that know the token may use the proxy.
+    // Failed logins are deliberately NOT written to the audit log: anyone without the token
+    // could otherwise fill the disk with junk requests.
     if let Some(expected) = &state.auth_token {
         let authorized = headers
             .get("x-api-key")
@@ -118,7 +136,7 @@ async fn handle_chat(
     // Never log the prompt itself: it is attacker-controlled (log injection) and may hold PII.
     if state.injection_guard.is_injection(&fold_homoglyphs(&normalized)) {
         println!("[ALERT] Prompt injection blocked (prompt length: {} bytes)", payload.prompt.len());
-        return reply(StatusCode::FORBIDDEN, "INJECTION_BLOCKED", "[BLOCKED_BY_GUARDRAIL]", true);
+        return block(&state, &normalized, "injection", "INJECTION_BLOCKED", "pattern match".to_string()).await;
     }
 
     // 3. GUARD PHASE: Sanitize PII (full-width digits are plain digits by now, so they are caught)
@@ -129,13 +147,15 @@ async fn handle_chat(
     let malicious_urls = state.threat_intel.find_malicious_urls(&sanitized).await;
     if !malicious_urls.is_empty() {
         println!("[ALERT] Malicious URL blocked ({} found)", malicious_urls.len());
-        return reply(StatusCode::FORBIDDEN, "MALICIOUS_URL_BLOCKED", "[BLOCKED_BY_GUARDRAIL]", true);
+        let detail = format!("urls={}", malicious_urls.len());
+        return block(&state, &normalized, "malicious_url", "MALICIOUS_URL_BLOCKED", detail).await;
     }
 
     let malicious_ips = state.threat_intel.find_malicious_ips(&sanitized).await;
     if !malicious_ips.is_empty() {
         println!("[ALERT] Malicious IP blocked ({} found)", malicious_ips.len());
-        return reply(StatusCode::FORBIDDEN, "MALICIOUS_IP_BLOCKED", "[BLOCKED_BY_GUARDRAIL]", true);
+        let detail = format!("ips={}", malicious_ips.len());
+        return block(&state, &normalized, "malicious_ip", "MALICIOUS_IP_BLOCKED", detail).await;
     }
 
     println!("[INFO] Prompt passed the guardrails (length: {} bytes)", payload.prompt.len());
@@ -160,7 +180,8 @@ async fn handle_chat(
     if let Some(text) = &answer {
         if state.canary_guard.leaks(text) {
             println!("[ALERT] Canary found in the model's answer, answer blocked");
-            return reply(StatusCode::FORBIDDEN, "OUTPUT_BLOCKED", "[BLOCKED_BY_GUARDRAIL]", true);
+            let detail = format!("answer_len={}", text.len());
+            return block(&state, &normalized, "output_canary", "OUTPUT_BLOCKED", detail).await;
         }
     }
 
