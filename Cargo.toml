@@ -29,3 +29,6 @@ unicode-normalization = "0.1"
 
 # Véletlen canary token generálása a kimeneti guardhoz
 rand = "0.8"
+
+# SHA-256 ujjlenyomat az audit naplóhoz (a prompt szövege nem kerül a naplóba)
+sha2 = "0.10"

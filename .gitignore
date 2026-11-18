@@ -4,6 +4,12 @@
 # Build outputs (Rust target folder)
 /target/
 
+# Incident audit log (metadata of blocked requests)
+audit.jsonl
+
+# Benchmark output
+benchmark/results.json
+
 # IDE specific files
 .vscode/
 .idea/
