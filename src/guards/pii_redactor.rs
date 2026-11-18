@@ -3,15 +3,19 @@ use regex::{Captures, Regex};
 /// Luhn checksum: real card numbers pass it, random digit strings (order numbers, IDs) mostly do not.
 fn luhn_valid(input: &str) -> bool {
     // Reject any non-digit character instead of silently ignoring it.
-    let digits: Vec<u32> =  match input
-    .chars()
-    .map(|c| c.to_digit(10)).
-    collect::<Option<Vec<u32>>>()
+    let digits: Vec<u32> = match input
+        .chars()
+        .map(|c| match c {
+            '0'..='9' => c.to_digit(10),
+            ' ' | '-' => None,
+            _ => return None,
+        })
+        .collect::<Option<Vec<u32>>>()
     {
         Some(digits) => digits,
         None => return false,
     };
-    
+
     if !(13..=16).contains(&digits.len()) {
         return false;
     }
@@ -22,10 +26,10 @@ fn luhn_valid(input: &str) -> bool {
         .map(|(index, &digit)| {
             if index % 2 == 1 {
                 let doubled = digit * 2;
-                if doubled > 9 { 
-                    doubled - 9 
-                } else { 
-                    doubled 
+                if doubled > 9 {
+                    doubled - 9
+                } else {
+                    doubled
                 }
             } else {
                 digit
@@ -63,7 +67,7 @@ impl PiiRedactor {
             // Pattern for standard email addresses
             email_regex: Regex::new(r"(?i)[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}").unwrap(),
             // Pattern for credit card numbers (16 digits with spaces or hyphens)
-            card_regex: Regex::new(r"\b(?:\d[ -]*?){13,16}\b").unwrap(),
+            card_regex: Regex::new(r"\b(?:[0-9][ -]?){13,19}\b").unwrap(),
             // Pattern for Hungarian TAJ (SSN) numbers (9 digits: 123 456 789 or 123456789)
             taj_regex: Regex::new(r"\b\d{3}[ -]?\d{3}[ -]?\d{3}\b").unwrap(),
             // OpenAI (sk-..., sk-proj-...), GitHub (ghp_...), Slack (xoxb-...) and Bearer tokens.
@@ -79,10 +83,18 @@ impl PiiRedactor {
         let text = self.email_regex.replace_all(&text, "[REDACTED_EMAIL]");
         // Cards and TAJ numbers are only redacted if the checksum is valid (fewer false positives).
         let text = self.card_regex.replace_all(&text, |caps: &Captures| {
-            if luhn_valid(&caps[0]) { "[REDACTED_CARD]".to_string() } else { caps[0].to_string() }
+            if luhn_valid(&caps[0]) {
+                "[REDACTED_CARD]".to_string()
+            } else {
+                caps[0].to_string()
+            }
         });
         let text = self.taj_regex.replace_all(&text, |caps: &Captures| {
-            if taj_valid(&caps[0]) { "[REDACTED_TAJ]".to_string() } else { caps[0].to_string() }
+            if taj_valid(&caps[0]) {
+                "[REDACTED_TAJ]".to_string()
+            } else {
+                caps[0].to_string()
+            }
         });
         text.into_owned()
     }
@@ -98,7 +110,7 @@ mod tests {
         let redactor = PiiRedactor::new();
         let input = "Contact me at user@example.com for details.";
         let redacted = redactor.redact(input);
-        
+
         assert_eq!(redacted, "Contact me at [REDACTED_EMAIL] for details.");
     }
 
@@ -107,7 +119,7 @@ mod tests {
         let redactor = PiiRedactor::new();
         let input = "My TAJ number is 123-456-788.";
         let redacted = redactor.redact(input);
-        
+
         assert_eq!(redacted, "My TAJ number is [REDACTED_TAJ].");
     }
 
@@ -124,18 +136,18 @@ mod tests {
         let redactor = PiiRedactor::new();
         let input = "Card number: 4111 1111 1111 1111.";
         let redacted = redactor.redact(input);
-        
+
         assert_eq!(redacted, "Card number: [REDACTED_CARD].");
     }
 
     #[test]
     fn test_multiple_pii_in_one_prompt() {
         let redactor = PiiRedactor::new();
-        let input = "Email: test@example.com, Card: 4111-1111-1111-1111, TAJ: 123 456 788";
-        let redacted = redactor.redact(input);
-        
+        let inputredact = "Email: test@example.com, Card: 4111-1111-1111-1111, TAJ: 123 456 788";
+        let redacted = redactor.redact(inputredact);
+
         assert_eq!(
-            redacted, 
+            redacted,
             "Email: [REDACTED_EMAIL], Card: [REDACTED_CARD], TAJ: [REDACTED_TAJ]"
         );
     }
@@ -145,7 +157,7 @@ mod tests {
         let redactor = PiiRedactor::new();
         let input = "Write a Rust program to calculate Fibonacci numbers.";
         let redacted = redactor.redact(input);
-        
+
         assert_eq!(redacted, input);
     }
 
@@ -154,8 +166,11 @@ mod tests {
         let redactor = PiiRedactor::new();
         let input = "Here is my key: ghp_1234567890abcdefghijklmnopqrstuvwxyz and test again.";
         let redacted = redactor.redact(input);
-        
-        assert_eq!(redacted, "Here is my key: [REDACTED_API_KEY] and test again.");
+
+        assert_eq!(
+            redacted,
+            "Here is my key: [REDACTED_API_KEY] and test again."
+        );
     }
 
     #[test]
@@ -164,5 +179,46 @@ mod tests {
         let input = "key=sk-proj-abcdefghijklmnopqrstuvwxyz_0123456789-AB end";
 
         assert_eq!(redactor.redact(input), "key=[REDACTED_API_KEY] end");
+    }
+    #[test]
+    fn test_credit_card_with_hyphens() {
+        let redactor = PiiRedactor::new();
+        let input = "Card: 4111-1111-1111-1111";
+        let expected = "Card: [REDACTED_CARD]";
+
+        assert_eq!(redactor.redact(input), expected);
+    }
+
+    #[test]
+    fn test_credit_card_with_spaces() {
+        let redactor = PiiRedactor::new();
+        let input = "Card: 4111 1111 1111 1111";
+        let expected = "Card: [REDACTED_CARD]";
+
+        assert_eq!(redactor.redact(input), expected);
+    }
+
+    #[test]
+    fn debug_card_regex() {
+        let regex = Regex::new(r"\b(?:[0-9][ -]?){13,19}\b").unwrap();
+
+        for input in [
+            "4111111111111111",
+            "4111-1111-1111-1111",
+            "4111 1111 1111 1111",
+        ] {
+            println!("Input: {input}");
+            println!("Match: {:?}", regex.find(input));
+        }
+    }
+    #[test]
+    fn debug_luhn_validation() {
+        for input in [
+            "4111111111111111",
+            "4111-1111-1111-1111",
+            "4111 1111 1111 1111",
+        ] {
+            println!("{input}: {}", luhn_valid(input));
+        }
     }
 }
