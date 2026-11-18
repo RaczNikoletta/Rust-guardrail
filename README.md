@@ -283,6 +283,9 @@ cargo test
 <img width="1507" height="263" alt="image" src="https://github.com/user-attachments/assets/39f6e932-b983-4626-a322-0527e15477e6" />
 <img width="1473" height="374" alt="image" src="https://github.com/user-attachments/assets/535f6099-e0ae-4062-befc-c8356ef465b1" />
 
+<img width="1229" height="471" alt="image" src="https://github.com/user-attachments/assets/97bfee50-75a1-489c-bea5-2aae3f7bd61d" />
+
+
 
 The unit tests cover normalization (zero-width, full-width and look-alike characters), the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) URL and IP extraction, the Gemini request and response handling, the canary guard, and the audit log (hashing, one-line JSON records, appending and the size limit).
 
