@@ -2,19 +2,15 @@ use regex::{Captures, Regex};
 
 /// Luhn checksum: real card numbers pass it, random digit strings (order numbers, IDs) mostly do not.
 fn luhn_valid(input: &str) -> bool {
-    // Reject any non-digit character instead of silently ignoring it.
-    let digits: Vec<u32> = match input
-        .chars()
-        .map(|c| match c {
-            '0'..='9' => c.to_digit(10),
-            ' ' | '-' => None,
-            _ => return None,
-        })
-        .collect::<Option<Vec<u32>>>()
-    {
-        Some(digits) => digits,
-        None => return false,
-    };
+    // Digits are collected, spaces and hyphens are skipped, anything else means "not a card number"
+    let mut digits: Vec<u32> = Vec::new();
+    for c in input.chars() {
+        match c {
+            '0'..='9' => digits.push(c.to_digit(10).unwrap()),
+            ' ' | '-' => {}
+            _ => return false,
+        }
+    }
 
     if !(13..=16).contains(&digits.len()) {
         return false;
@@ -36,7 +32,7 @@ fn luhn_valid(input: &str) -> bool {
             }
         })
         .sum();
-    //A valaid Luhn checksum must be divisible by 10
+    //A valid Luhn checksum must be divisible by 10
     sum.is_multiple_of(10)
 }
 
@@ -196,29 +192,5 @@ mod tests {
         let expected = "Card: [REDACTED_CARD]";
 
         assert_eq!(redactor.redact(input), expected);
-    }
-
-    #[test]
-    fn debug_card_regex() {
-        let regex = Regex::new(r"\b(?:[0-9][ -]?){13,19}\b").unwrap();
-
-        for input in [
-            "4111111111111111",
-            "4111-1111-1111-1111",
-            "4111 1111 1111 1111",
-        ] {
-            println!("Input: {input}");
-            println!("Match: {:?}", regex.find(input));
-        }
-    }
-    #[test]
-    fn debug_luhn_validation() {
-        for input in [
-            "4111111111111111",
-            "4111-1111-1111-1111",
-            "4111 1111 1111 1111",
-        ] {
-            println!("{input}: {}", luhn_valid(input));
-        }
     }
 }
