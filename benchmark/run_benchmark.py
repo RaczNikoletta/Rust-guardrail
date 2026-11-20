@@ -157,6 +157,8 @@ def run_case(args, token, group, category, prompt, secrets=()):
     code, data, elapsed_ms = send(args.url, token, prompt, args.timeout)
     if code == 401:
         sys.exit("401 Unauthorized: set GUARDRAIL_TOKEN (environment or .env) or pass --token.")
+    if code == 429:
+        sys.exit("429 Too Many Requests: set RATE_LIMIT_PER_MINUTE=0 (or a higher value) in .env and restart the proxy.")
 
     answered = "blocked" in data  # a 413 or other odd reply has no guardrail JSON
     blocked = data.get("blocked") is True
