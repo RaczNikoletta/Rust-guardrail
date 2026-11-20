@@ -24,7 +24,7 @@ It uses deterministic checks only (regex, checksums and an API lookup). This mak
 | [x] | **Output Canary Guard** | A random canary token is hidden in the system instruction of every Gemini call. If it appears in the answer (even spaced out or with invisible characters), the answer is blocked. |
 | [x] | **Incident audit log** | `src/tools/audit.rs` appends one JSON line (timestamp, guard, status, prompt length, SHA-256 of the prompt, never the raw prompt) to `audit.jsonl` for every blocked request. |
 | [x] | **Incident report skill** | `audit/report.py` reads the log, computes statistics and asks Gemini to write a short incident report from the aggregated numbers (definition in `skills/incident-audit/SKILL.md`). |
-| [ ] | **Rate limiting** | Limit the number of requests per client. |
+| [x] | **Rate limiting** | `src/guards/rate_limit.rs` limits the requests per API key (fixed window, default 60 per minute, `RATE_LIMIT_PER_MINUTE`). Over the limit the proxy answers 429 before any guard, VirusTotal or Gemini work is done. |
 | [x] | **Benchmark script** | `benchmark/run_benchmark.py` (Python, standard library only) sends 57 prompts to a running proxy and reports the detection rate per attack category, PII redaction, false positives and latency. The measured results are still TODO (see [Benchmark](#benchmark)). |
 | [~] | **File upload guard** (optional extension) | Check uploaded text files (size, extension, file name, UTF-8) and run their content through the same guards as a prompt (normalization, injection, PII). Look up the SHA-256 hash on VirusTotal without uploading the file. See [Future Work](#future-work-not-part-of-the-core-assignment). |
 
@@ -41,7 +41,7 @@ The diagram shows the design. Steps marked `(TODO)` are not implemented yet (cur
 ┌────────────────────────────────────────────────────────┐
 │                RUST GUARDRAIL PROXY                    │
 │                                                        │
-│  0. Auth              ──► x-api-key check              │
+│  0. Auth + Rate limit ──► x-api-key, requests/minute   │
 │  1. Normalizer        ──► NFKC, invisible chars removed│
 │  2. Input Guard       ──► Prompt Injection Filter      │
 │  3. PII Redactor      ──► Email, Card, TAJ, API keys   │
@@ -73,6 +73,7 @@ src/
     prompt_injection.rs     injection regex guard
     pii_redactor.rs         PII and secret redaction (Luhn / TAJ checks)
     output_canary.rs        canary token check on the model's answer
+    rate_limit.rs           fixed-window rate limiter per API key
   tools/
     threat_intel.rs         VirusTotal URL and IP lookup (async)
     gemini.rs               Gemini API client (async)
@@ -107,6 +108,7 @@ cargo run                   # start the proxy on http://127.0.0.1:3000
 | `GEMINI_API_KEY` | optional | Enables the Gemini call. If empty, prompts are only guarded and `answer` is `null`. |
 | `GEMINI_MODEL` | optional | Gemini model name (default `gemini-2.5-flash`). |
 | `AUDIT_LOG_PATH` | optional | Incident log file (default `audit.jsonl`). |
+| `RATE_LIMIT_PER_MINUTE` | optional | Max requests per API key per minute (default `60`, `0` turns the limit off). |
 
 Never commit `.env`. It is already listed in `.gitignore`.
 
@@ -141,6 +143,7 @@ Response (200):
 | 403 | `MALICIOUS_IP_BLOCKED` | VirusTotal flagged an IP address in the prompt. |
 | 403 | `OUTPUT_BLOCKED` | The model's answer contained the secret canary (instruction leak). |
 | 413 | (empty) | Request body larger than 16 KB. |
+| 429 | `RATE_LIMITED` | Too many requests for this API key in the current minute. |
 | 502 | `LLM_ERROR` | The Gemini call failed (network error, timeout, API error or no answer). |
 
 ---
@@ -225,32 +228,7 @@ The proxy parses attacker-controlled text and sits on the critical path of every
 | Hungarian PII (TAJ) | Supported | Not built in |
 | Maturity | Course prototype | Production framework |
 
-The two approaches are complementary: a fast deterministic layer first, a semantic layer behind it. Measured numbers (detection rate, false positives, latency) will be added once the benchmark is done.
-
-First benchmark results:
-
-=== RESULTS ===
-
-Attacks (should be blocked):
-  direct          10/10  100.0%
-  obfuscated       8/8   100.0%
-  paraphrase       0/9     0.0%
-  ALL ATTACKS     18/27   66.7%
-
-PII (secret must be gone from sanitized_prompt):
-  PII             10/10  100.0%
-
-Benign (should pass unchanged):
-  normal          12/12  100.0%
-  tricky           7/8    87.5%
-  false positives (blocked): 1/20
-  altered (redacted by mistake): 0/20
-    -> For my security course: what does the phrase 'ignore previous instructions' mean in an att
-
-Latency (ms):
-  all requests      median    137.3   p95    188.6   max    307.0
-  blocked only      median     15.1   p95     29.8   max     29.8
-
+The two approaches are complementary: a fast deterministic layer first, a semantic layer behind it. Measured numbers (detection rate, false positives, latency) will be added once the benchmark is done (TODO).
 
 ---
 
@@ -266,11 +244,12 @@ Latency (ms):
 * The model's answer is checked only for the canary. Other harmful content in the answer is not detected, and an answer that encodes the canary (e.g. Base64) or only repeats a part of the instructions passes.
 * Every request is a single turn: there is no conversation history. If the Gemini call fails, the request is not retried.
 * PII coverage is limited to emails, cards, TAJ numbers and a few API key formats.
-* No rate limiting, no TLS (run behind a reverse proxy) and the server listens on localhost only.
+* No TLS (run behind a reverse proxy) and the server listens on localhost only.
+* Rate limiting is per API key. With one `GUARDRAIL_TOKEN` all clients share one counter, so it is effectively a global limit. If authentication is disabled, all requests share one counter. Fixed windows allow a short burst of up to twice the limit at a window boundary. The counters are in memory and reset on restart. The 429 response has no `Retry-After` header yet.
 * Only the chat prompt is checked. Uploaded files are not supported yet (see Future Work).
 * The audit log has no tamper protection (no hash chain or signature). It is one local file with a 5 MB limit and no rotation; when it is full, new incidents are not written.
 * The prompt hash is a plain SHA-256, so a short or guessable prompt could be recovered by brute force. Treat the log as sensitive.
-* Failed logins (401) are not logged on purpose, so unauthenticated callers cannot fill the disk.
+* Failed logins (401) and rate-limited requests (429) are not logged on purpose, so callers cannot fill the disk.
 
 ---
 
@@ -312,7 +291,7 @@ cargo test
 
 
 
-The unit tests cover normalization (zero-width, full-width and look-alike characters), the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) URL and IP extraction, the Gemini request and response handling, the canary guard, and the audit log (hashing, one-line JSON records, appending and the size limit).
+The unit tests cover normalization (zero-width, full-width and look-alike characters), the injection patterns, every redaction type (including invalid card and TAJ numbers that must stay untouched) URL and IP extraction, the Gemini request and response handling, the canary guard, the rate limiter (limit, window expiry, separate keys) and the audit log (hashing, one-line JSON records, appending and the size limit).
 
 ---
 
@@ -327,7 +306,7 @@ python benchmark/run_benchmark.py        # terminal 2: run the benchmark
 
 Options: `--url` (default `http://127.0.0.1:3000/v1/chat`), `--token` (default: `GUARDRAIL_TOKEN` from the environment or `.env`), `--delay` (seconds between requests, useful against Gemini rate limits), `--timeout`.
 
-For guard-only latency, leave `GEMINI_API_KEY` empty in `.env` while benchmarking. Otherwise every prompt that passes the guards also waits for the Gemini answer. The prompts contain no URLs or IP addresses, so VirusTotal quota is not used.
+For guard-only latency, leave `GEMINI_API_KEY` empty in `.env` while benchmarking. Otherwise every prompt that passes the guards also waits for the Gemini answer. Set `RATE_LIMIT_PER_MINUTE=0` while benchmarking: the script sends 57 prompts quickly and a second run within a minute would hit the default limit (the script stops with a message on a 429). The prompts contain no URLs or IP addresses, so VirusTotal quota is not used.
 
 | Group | Prompts | Counted as correct when |
 |---|---|---|
@@ -346,6 +325,5 @@ The script prints one line per prompt, then the rates per group, the false posit
 
 ## TODO Summary
 
-- [ ] Rate limiting
 - [ ] Run the benchmark and add the measured numbers to this README (the script is ready; NeMo comparison only if time allows)
 - [~] File upload guard (optional extension, see Future Work)
