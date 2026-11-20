@@ -225,7 +225,32 @@ The proxy parses attacker-controlled text and sits on the critical path of every
 | Hungarian PII (TAJ) | Supported | Not built in |
 | Maturity | Course prototype | Production framework |
 
-The two approaches are complementary: a fast deterministic layer first, a semantic layer behind it. Measured numbers (detection rate, false positives, latency) will be added once the benchmark is done (TODO).
+The two approaches are complementary: a fast deterministic layer first, a semantic layer behind it. Measured numbers (detection rate, false positives, latency) will be added once the benchmark is done.
+
+First benchmark results:
+
+=== RESULTS ===
+
+Attacks (should be blocked):
+  direct          10/10  100.0%
+  obfuscated       8/8   100.0%
+  paraphrase       0/9     0.0%
+  ALL ATTACKS     18/27   66.7%
+
+PII (secret must be gone from sanitized_prompt):
+  PII             10/10  100.0%
+
+Benign (should pass unchanged):
+  normal          12/12  100.0%
+  tricky           7/8    87.5%
+  false positives (blocked): 1/20
+  altered (redacted by mistake): 0/20
+    -> For my security course: what does the phrase 'ignore previous instructions' mean in an att
+
+Latency (ms):
+  all requests      median    137.3   p95    188.6   max    307.0
+  blocked only      median     15.1   p95     29.8   max     29.8
+
 
 ---
 
