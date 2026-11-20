@@ -11,6 +11,7 @@ use guards::normalize::{fold_homoglyphs, normalize};
 use guards::output_canary::OutputCanaryGuard;
 use guards::pii_redactor::PiiRedactor;
 use guards::prompt_injection::PromptInjectionGuard;
+use guards::rate_limit::RateLimiter;
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr, sync::Arc};
 use tools::audit::AuditLog;
@@ -43,6 +44,7 @@ struct AppState {
     threat_intel: ThreatIntel,
     gemini: GeminiClient,
     audit: AuditLog,
+    rate_limiter: RateLimiter,
     /// If set, clients must send it in the `x-api-key` header.
     auth_token: Option<String>,
 }
@@ -93,6 +95,7 @@ async fn main() {
         threat_intel: ThreatIntel::new(),
         gemini: GeminiClient::new(),
         audit: AuditLog::new(),
+        rate_limiter: RateLimiter::new(),
         auth_token,
     });
 
@@ -117,14 +120,27 @@ async fn handle_chat(
     // 0. AUTH: only clients that know the token may use the proxy.
     // Failed logins are deliberately NOT written to the audit log: anyone without the token
     // could otherwise fill the disk with junk requests.
-    if let Some(expected) = &state.auth_token {
-        let authorized = headers
-            .get("x-api-key")
-            .and_then(|v| v.to_str().ok())
-            .map_or(false, |given| tokens_match(given, expected));
-        if !authorized {
-            return reply(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", "[UNAUTHORIZED]", true);
+    // `client_key` is only ever a key that passed the check (or a fixed name when auth is off),
+    // so a caller cannot create new rate limit counters by inventing keys.
+    let client_key: &str = match &state.auth_token {
+        Some(expected) => {
+            let authorized = headers
+                .get("x-api-key")
+                .and_then(|v| v.to_str().ok())
+                .map_or(false, |given| tokens_match(given, expected));
+            if !authorized {
+                return reply(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", "[UNAUTHORIZED]", true);
+            }
+            expected.as_str()
         }
+        None => "anonymous",
+    };
+
+    // 0b. RATE LIMIT: per API key. It runs before the expensive steps (guards, VirusTotal, Gemini).
+    // Also not written to the audit log, so a flood cannot push real incidents out of the file.
+    if let Err(wait) = state.rate_limiter.check(client_key) {
+        println!("[WARN] Rate limit exceeded, retry in {} s", wait);
+        return reply(StatusCode::TOO_MANY_REQUESTS, "RATE_LIMITED", "[RATE_LIMITED]", true);
     }
 
     // 1. NORMALIZE: one canonical form (NFKC, no invisible characters) before any guard runs.
