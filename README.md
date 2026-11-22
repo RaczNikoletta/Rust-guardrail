@@ -25,7 +25,7 @@ It uses deterministic checks only (regex, checksums and an API lookup). This mak
 | [x] | **Incident audit log** | `src/tools/audit.rs` appends one JSON line (timestamp, guard, status, prompt length, SHA-256 of the prompt, never the raw prompt) to `audit.jsonl` for every blocked request. |
 | [x] | **Incident report skill** | `audit/report.py` reads the log, computes statistics and asks Gemini to write a short incident report from the aggregated numbers (definition in `skills/incident-audit/SKILL.md`). |
 | [x] | **Rate limiting** | `src/guards/rate_limit.rs` limits the requests per API key (fixed window, default 60 per minute, `RATE_LIMIT_PER_MINUTE`). Over the limit the proxy answers 429 before any guard, VirusTotal or Gemini work is done. |
-| [x] | **Benchmark script** | `benchmark/run_benchmark.py` (Python, standard library only) sends 57 prompts to a running proxy and reports the detection rate per attack category, PII redaction, false positives and latency. The measured results are still TODO (see [Benchmark](#benchmark)). |
+| [x] | **Benchmark script** | `benchmark/run_benchmark.py` (Python, standard library only for the Rust proxy; the NeMo comparison is optional) sends 57 prompts to a running proxy and reports the detection rate per attack category, PII redaction, false positives and latency. The measured results are in [Benchmark Evaluation](#benchmark-evaluation). |
 | [~] | **File upload guard** (optional extension) | Check uploaded text files (size, extension, file name, UTF-8) and run their content through the same guards as a prompt (normalization, injection, PII). Look up the SHA-256 hash on VirusTotal without uploading the file. See [Future Work](#future-work-not-part-of-the-core-assignment). |
 
 ---
@@ -83,7 +83,8 @@ audit/
 skills/
   incident-audit/SKILL.md   skill definition
 benchmark/
-  run_benchmark.py          Python benchmark script (talks to the proxy over HTTP)
+  run_benchmark.py          Python benchmark script (talks to the proxy over HTTP, optional NeMo comparison)
+  nemo_config/              NeMo Guardrails config used by --target nemo
 ```
 
 ---
@@ -199,7 +200,7 @@ The proxy parses attacker-controlled text and sits on the critical path of every
 * **Data-race freedom.** State shared between concurrent requests (`Arc<AppState>`) must be thread-safe, otherwise the code does not compile.
 * **Errors are part of the type system.** `Option` and `Result` force the code to handle missing fields (for example a blocked Gemini answer) and failed network calls. There are no null pointers.
 * **ReDoS-resistant regex.** The `regex` crate matches in linear time, so a crafted prompt cannot freeze the guards. Trade-off: no lookaround and no backreferences.
-* **Low, predictable overhead.** No GC pauses and a single static binary (no runtime to install). Measured numbers are TODO (see Benchmark).
+* **Low, predictable overhead.** No GC pauses and a single static binary (no runtime to install). Measured guard time: median 17.5 ms per request, p95 27.9 ms (see Benchmark Evaluation).
 
 | | Rust | C++ | Go | Python | Java / C# |
 |---|---|---|---|---|---|
@@ -228,7 +229,7 @@ The proxy parses attacker-controlled text and sits on the critical path of every
 | Hungarian PII (TAJ) | Supported | Not built in |
 | Maturity | Course prototype | Production framework |
 
-The two approaches are complementary: a fast deterministic layer first, a semantic layer behind it. Measured numbers (detection rate, false positives, latency) will be added once the benchmark is done (TODO).
+The two approaches are complementary: a fast deterministic layer first, a semantic layer behind it. The measured numbers are in [Benchmark Evaluation](#benchmark-evaluation).
 
 ---
 
@@ -293,7 +294,7 @@ The unit tests cover normalization (zero-width, full-width and look-alike charac
 
 ## Benchmark
 
-The benchmark is a separate Python script. It only talks to the proxy over HTTP, so the Rust code is not touched and no `pip install` is needed.
+The benchmark is a separate Python script. It talks to the proxy over HTTP, so the Rust code is not touched, and the Rust mode needs no `pip install`. Only the optional NeMo comparison needs extra packages.
 
 ```powershell
 cargo run                                # terminal 1: start the proxy
@@ -339,6 +340,22 @@ Use --delay 1.5 to pace requests and avoid upstream LLM rate limits/quota errors
 ### Benchmark Evaluation
 
 The guardrail caught **100% (18/18)** of direct and obfuscated prompt injection attempts, redacted **100% (10/10)** of PII test cases, and passed **12/12** normal benign prompts with **0/20** accidental redactions. Overall attack detection is **66.7% (18/27)** because `paraphrase` attacks (`0/9`) remain a known limitation. There was **1/20** false positive on a benign security-course prompt quoting `"ignore previous instructions"`.
+
+Latency (Rust proxy with `GEMINI_API_KEY` empty, so only the guards run, including the local HTTP round trip): median **17.5 ms**, p95 **27.9 ms** over all 57 prompts.
+
+Rust vs. NeMo `self check input` (the 10 PII cases are Rust only; NeMo makes one Gemini call per prompt):
+
+| | Rust Guardrail | NeMo |
+|---|---|---|
+| Direct + obfuscated attacks | 18/18 | 18/18 |
+| Paraphrase attacks | 0/9 | 9/9 |
+| All attacks | 18/27 | 27/27 |
+| False positives (benign) | 1/20 | 0/20 |
+| LLM calls per prompt | 0 | 1 |
+| Median latency (blocked prompts) | 17.3 ms | 1106 ms |
+| p95 latency (blocked prompts) | 30.0 ms | 6444 ms |
+
+NeMo detects more, mainly the paraphrased attacks. The Rust guard is about 60 times faster, needs no LLM call, gives the same result every run, and redacts PII before anything leaves the proxy. NeMo's latency is mostly the Gemini call and varies with the API load.
 
 
 
