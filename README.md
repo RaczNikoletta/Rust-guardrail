@@ -334,5 +334,4 @@ The guardrail caught **100% (18/18)** of direct and obfuscated prompt injection 
 
 ## TODO Summary
 
-- [ ] Run the benchmark and add the measured numbers to this README (the script is ready; NeMo comparison only if time allows)
 - [~] File upload guard (optional extension, see Future Work)
