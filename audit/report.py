@@ -11,6 +11,7 @@ Safety rules:
 Usage:
     python audit/report.py                 # statistics + Gemini report (needs GEMINI_API_KEY)
     python audit/report.py --no-llm        # statistics only
+    python audit/report.py --json          # statistics as JSON only (input for an AI agent, see the skill)
 """
 
 import argparse
@@ -179,15 +180,19 @@ def main():
     parser = argparse.ArgumentParser(description="Incident report from audit.jsonl")
     parser.add_argument("--log", default=str(PROJECT_DIR / "audit.jsonl"))
     parser.add_argument("--no-llm", action="store_true", help="statistics only")
+    parser.add_argument("--json", action="store_true", help="print only the aggregated statistics as JSON (for an AI agent)")
     parser.add_argument("--model", default=read_env("GEMINI_MODEL") or DEFAULT_MODEL)
     args = parser.parse_args()
 
     if not Path(args.log).is_file():
-        print(f"No audit log found at {args.log}. Trigger some guards first.")
+        print(f"No audit log found at {args.log}. Trigger some guards first.", file=sys.stderr if args.json else sys.stdout)
         return 1
 
     records, skipped = load_records(args.log)
     summary = summarize(records, skipped)
+    if args.json:
+        print(json.dumps(summary, indent=2))
+        return 0
     print_summary(summary)
 
     if args.no_llm or summary["total_incidents"] == 0:
