@@ -328,7 +328,7 @@ python benchmark/run_benchmark.py --target both --delay 1.5
 
 NeMo is configured in `benchmark/nemo_config/` with one input rail (`self check input`, an LLM call per prompt) and runs in-process. Only the input rail runs, so the main model never answers; the measured latency is the guard check including its one LLM call (model `gemini-3.5-flash-lite`). Differences to keep in mind:
 
-* NeMo does not return a redacted prompt, so the 10 PII cases are run for the Rust proxy only. For the benign prompts, NeMo is only checked for not blocking.
+* The NeMo configuration has no PII rail: `self check input` only decides (block or pass) and returns no redacted prompt, so there is nothing to check, and the 10 PII cases are run for the Rust proxy only. NeMo has a built-in Presidio-based sensitive data rail that was not enabled here, and Hungarian TAJ numbers would need a custom recognizer. For the benign prompts, NeMo is only checked for not blocking.
 * The self-check is an LLM, so its result can change between runs. The first NeMo call (warm-up) is not measured.
 * NeMo's engine name and rail API depend on the installed version; check `benchmark/nemo_config/config.yml` if the model fails to load.
 
