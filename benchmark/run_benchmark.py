@@ -11,7 +11,7 @@ Usage (two terminals):
 For guard-only latency, leave GEMINI_API_KEY empty in .env while benchmarking.
 Otherwise every request that passes the guards also waits for the Gemini answer.
 
-NeMo Guardrails comparison (needs: pip install nemoguardrails langchain-google-genai):
+NeMo Guardrails comparison (needs: pip install nemoguardrails, and OPENAI_API_KEY set to the Gemini key):
     python benchmark/run_benchmark.py --target nemo    # NeMo only
     python benchmark/run_benchmark.py --target both    # Rust proxy and NeMo, side by side
 """
@@ -195,7 +195,7 @@ def make_nemo_caller(config_dir):
     try:
         from nemoguardrails import LLMRails, RailsConfig  # imported here: the Rust mode stays stdlib-only
     except ImportError:
-        sys.exit("The nemo target needs: pip install nemoguardrails langchain-google-genai")
+        sys.exit("The nemo target needs: pip install nemoguardrails")
 
     rails = LLMRails(RailsConfig.from_path(str(config_dir)))
     # Input rails only: the main model never answers, so only the guard itself is measured.
