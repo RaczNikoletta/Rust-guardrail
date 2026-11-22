@@ -108,7 +108,7 @@ A mérés `GEMINI_API_KEY` nélkül futott, ezért az átengedett kérések idej
 
 ### NeMo Guardrails összehasonlítás
 
-Az összehasonlítás a `python benchmark/run_benchmark.py --target both` paranccsal fut (beállítás: `benchmark/nemo_config/`). A NeMo-nál csak a bemeneti szűrő (`self check input`, promptonként egy LLM-hívás) fut, a PII esetek kimaradnak, mert a NeMo nem ad vissza kitakart promptot.
+Az összehasonlítás a `python benchmark/run_benchmark.py --target both` paranccsal fut (beállítás: `benchmark/nemo_config/`). A NeMo-nál csak a bemeneti szűrő (`self check input`, promptonként egy LLM-hívás) fut. A PII esetek azért maradnak ki, mert a benchmark NeMo-konfigurációjában nincs PII-szűrő: a `self check input` csak döntést hoz (blokkol vagy átenged), kitakart promptot nem ad vissza, így nincs mit ellenőrizni. A NeMo-nak van beépített, Presidio alapú érzékeny adat szűrője, ezt nem kapcsoltuk be, a magyar TAJ számhoz pedig saját felismerő kellene.
 
 **A mérés módja.** Egyetlen futás (`--target both --delay 1.5`): 57 prompt a Rust proxyn (a `GEMINI_API_KEY` üres volt, így csak a guardok futottak) és 47 prompt a NeMo-n (PII nélkül). A NeMo `self check input` szűrője a `gemini-3.5-flash-lite` modellt hívta. Kis mintáról van szó, és a NeMo eredménye LLM-alapú, ezért futásonként változhat, így a számok nagyságrendi összehasonlításra alkalmasak, pontos százalékokra nem.
 
@@ -118,7 +118,7 @@ Az összehasonlítás a `python benchmark/run_benchmark.py --target both` paranc
 | Obfuscated | 8/8 | 8/8 |
 | Paraphrase | 0/9 | 9/9 |
 | Összes támadás | 18/27 | 27/27 |
-| PII | 10/10 | nem mérhető |
+| PII | 10/10 | nincs mérve (nincs PII-szűrő a konfigurációban) |
 | Hamis pozitív | 1/20 | 0/20 |
 | Hiba (upstream) | 0 | 0 |
 | Medián késleltetés, blokkolt kérések | 17,3 ms | 1106 ms |
@@ -193,7 +193,7 @@ Benchmark futtatása: a `GEMINI_API_KEY` legyen üres a tiszta guard idő méré
 - Nincs TLS, a szerver csak a localhoston hallgat.
 - A rate limit számlálói memóriában vannak, újraindításkor nullázódnak. Egyetlen `GUARDRAIL_TOKEN` esetén az összes kliens közös számlálót használ. Az ablakhatáron rövid ideig a limit kétszerese is átmehet. A 429 válasz nem tartalmaz `Retry-After` fejlécet.
 - Az audit napló nincs védve módosítás ellen, 5 MB-os korlátja van forgatás nélkül, és a prompt sima SHA-256 ujjlenyomata rövid vagy kitalálható prompt esetén visszafejthető. A naplót bizalmasként kell kezelni.
-- A NeMo összehasonlításban az LLM-alapú ellenőrzés eredménye futásról futásra változhat, és a PII esetek nem hasonlíthatók össze.
+- A NeMo összehasonlításban az LLM-alapú ellenőrzés eredménye futásról futásra változhat, és a PII nincs mérve, mert a NeMo-konfigurációban nincs PII-szűrő.
 - A tesztkészletet a guarddal együtt írtam, a `direct` és `obfuscated` promptok a guard saját mintáihoz készültek. A 18/18 ezért azt mutatja, hogy a guard felismeri a saját mintáit, és nem általánosítható detekciós arány. A független rész a `paraphrase` csoport, ahol a Rust guard egyet sem kap el.
 
 ## 10. Továbbfejlesztési lehetőségek
