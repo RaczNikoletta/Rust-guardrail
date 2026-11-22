@@ -282,12 +282,8 @@ Suggested scope:
 ```powershell
 cargo test
 ```
-<img width="1423" height="274" alt="image" src="https://github.com/user-attachments/assets/2f591717-a450-4891-bb57-054cc383b4fe" />
-<img width="1475" height="401" alt="image" src="https://github.com/user-attachments/assets/ab286642-5c8b-490c-8df6-c68f3f6788b1" />
-<img width="1507" height="263" alt="image" src="https://github.com/user-attachments/assets/39f6e932-b983-4626-a322-0527e15477e6" />
-<img width="1473" height="374" alt="image" src="https://github.com/user-attachments/assets/535f6099-e0ae-4062-befc-c8356ef465b1" />
+<img width="1479" height="586" alt="image" src="https://github.com/user-attachments/assets/26478e1f-2208-46d8-ba2a-57b778e6b8ce" />
 
-<img width="1229" height="471" alt="image" src="https://github.com/user-attachments/assets/97bfee50-75a1-489c-bea5-2aae3f7bd61d" />
 
 
 
