@@ -156,6 +156,24 @@ Prompt length   : min 25, avg 47.7, max 94 bytes
 - **A 2 `output_canary` incidens a kétrétegű védelmet mutatja.** A prompt átment az input guardokon, a Gemini válasza viszont tartalmazta a canary tokent. A proxy ezt észlelte (`[ALERT] Canary found in the model's answer, answer blocked`), a válasz helyett `OUTPUT_BLOCKED` státuszt adott, és naplózta az esetet. A feketelista nem fogta meg a promptot, az output guard igen.
 - **A canary-ellenőrzés csak akkor fut, ha a Gemini be van kapcsolva.** A `GEMINI_API_KEY` nélkül lefuttatott benchmark (18/27) ezért csak az input guardokat méri, az output guard hatása abban nem látszik.
 
+**Az AI-ágens skill által írt riport (példa).** Ugyanebből a `--json` kimenetből az `incident-audit` skill alapján az ágens ezt a riportot írta:
+
+> **Összefoglaló:** 191 blokkolt kérés történt 2026. november 20. 12:00 és 2026. november 22. 09:00 UTC között. Az `injection` guard 189, az `output_canary` guard 2 incidenshez kapcsolódott.
+>
+> **Megjegyzendő minták:**
+> - Az `injection` guard 189 incidenssel uralta a blokkolásokat.
+> - A legforgalmasabb óra 2026. november 22. 09:00 UTC volt 58 incidenssel.
+> - Egy `32126a0c69d7` ujjlenyomat 30 alkalommal ismétlődött.
+> - 2 `output_canary` incidens történt.
+> - A napló 0 hibás sort hagyott ki.
+>
+> **Ajánlott intézkedések:**
+> - Vizsgálja meg külön mind a 2 `output_canary` incidenst.
+> - Különítse el vizsgálat céljából a 30 alkalommal ismétlődő `32126a0c69d7` ujjlenyomatot.
+> - Fókuszáljon a 2026. november 22. 09:00 UTC-s 58 incidensre.
+
+A skill szabályai (pontosan három szakasz, legfeljebb három javaslat, mindegyik adatból származó számhoz kötve, nincs ok, hatékonysági arány vagy biztonsági következtetés) tartják rövidre és adatközelire a riportot. Az első változatok még hosszabbak voltak, és olyan állításokat is tartalmaztak, amelyeket az adat nem támaszt alá (például "nincs bizonyíték adatkiszivárgásra", a forgalom benchmarkként való azonosítása), ezért a `SKILL.md`-t a tesztelés alapján szigorítani kellett.
+
 ## 7. Összehasonlítás a NeMo Guardrails-szel
 
 | Szempont | Rust Guardrail | NeMo Guardrails |
