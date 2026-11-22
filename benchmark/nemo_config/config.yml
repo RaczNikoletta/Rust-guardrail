@@ -4,7 +4,10 @@
 models:
   - type: main
     engine: google_genai
-    model: gemini-2.5-flash-lite
+    model: gemini-3.5-flash-lite
+    api_key_env_var: OPENAI_API_KEY
+    parameters:
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai/
 
 rails:
   input:
