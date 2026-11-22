@@ -319,6 +319,15 @@ For guard-only latency, leave `GEMINI_API_KEY` empty in `.env` while benchmarkin
 
 The script prints one line per prompt, then the rates per group, the false positives, the prompts that were altered by mistake, and the latency (median, p95, max; blocked requests alone give the pure guard time because they never reach Gemini or VirusTotal). The full results are saved to `benchmark/results.json`.
 
+Use --delay 1.5 to pace requests and avoid upstream LLM rate limits/quota errors.
+<img width="712" height="40" alt="image" src="https://github.com/user-attachments/assets/634fa880-b947-413d-8551-2ee4be31b152" />
+
+<img width="1551" height="593" alt="image" src="https://github.com/user-attachments/assets/567edde2-4a89-4c9d-961f-33db24fd27e8" />
+
+### Benchmark Evaluation
+
+The guardrail caught **100% (18/18)** of direct and obfuscated prompt injection attempts, redacted **100% (10/10)** of PII test cases, and passed **12/12** normal benign prompts with **0/20** accidental redactions. Overall attack detection is **66.7% (18/27)** because `paraphrase` attacks (`0/9`) remain a known limitation. There was **1/20** false positive on a benign security-course prompt quoting `"ignore previous instructions"`.
+
 
 
 ---
