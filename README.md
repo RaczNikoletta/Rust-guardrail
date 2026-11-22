@@ -179,6 +179,31 @@ python audit/report.py --no-llm          # statistics only
 
 The script skips malformed lines and sends only aggregated numbers to Gemini, never single records.
 
+Example (`--no-llm`) after repeated benchmark runs:
+
+```text
+=== Incident statistics ===
+Total incidents : 191
+Skipped lines   : 0
+Period          : 2026-11-20 12:00 UTC  ->  2026-11-22 09:00 UTC
+By guard:
+  injection       189
+  output_canary   2
+By status:
+  INJECTION_BLOCKED       189
+  OUTPUT_BLOCKED          2
+Busiest hour    : 2026-11-22 09:00 UTC (58 incidents)
+Repeated prompts (same SHA-256):
+  32126a0c69d7...  x30  injection
+  b70607ca30f3...  x10  injection
+  ...
+Prompt length   : min 25, avg 47.7, max 94 bytes
+```
+
+The data comes from benchmark runs, not from real traffic: the repeated hashes (`x10`) show that the prompts were sent about ten times, and the busiest hour is the latest benchmark run. The 189 `injection` incidents include the one known false positive.
+
+The 2 `output_canary` incidents are cases where a prompt passed all input guards, but Gemini's answer contained the secret canary. The proxy printed `[ALERT] Canary found in the model's answer, answer blocked` and returned `OUTPUT_BLOCKED` instead of the answer. This is the second layer working: the blacklist did not catch the prompt, the output guard did. The canary check only runs when Gemini is enabled, so the benchmark runs with an empty `GEMINI_API_KEY` measure the input guards only.
+
 ---
 
 ## Security Design Decisions
@@ -356,7 +381,7 @@ Rust vs. NeMo `self check input` (the 10 PII cases are Rust only; NeMo makes one
 
 NeMo detects more, mainly the paraphrased attacks. The Rust guard is about 60 times faster, needs no LLM call, gives the same result every run, and redacts PII before anything leaves the proxy. NeMo's latency is mostly the Gemini call and varies with the API load.
 
-**How it was measured.** One run of `python benchmark/run_benchmark.py --target both --delay 1.5`: 57 prompts through the Rust proxy (`GEMINI_API_KEY` empty, so only the guards ran) and 47 through NeMo (no PII cases). NeMo's `self check input` called `gemini-3.5-flash-lite`. This is a small sample, and NeMo's result comes from an LLM and can change between runs, so the numbers are good for comparing orders of magnitude, not for exact percentages.
+**How it was measured.** One run of `python benchmark/run_benchmark.py --target both --delay 1.5`: 57 prompts through the Rust proxy (`GEMINI_API_KEY` empty, so only the guards ran) and 47 through NeMo (no PII cases). NeMo's `self check input` called `gemini-3.5-flash-lite`. This is a small sample, and NeMo's result comes from an LLM and can change between runs, so the numbers are good for comparing orders of magnitude, not for exact percentages. The Rust numbers measure the input guards only: the output canary guard needs a Gemini answer, so it did not run with an empty `GEMINI_API_KEY`.
 
 **Limits of the test set.** The test prompts were written together with the guard. The `direct` and `obfuscated` prompts follow the guard's own patterns, so 18/18 shows that the guard recognises its own patterns and is not a general detection rate. The `paraphrase` group is the independent part of the test, and there the Rust guard catches none.
 
