@@ -26,7 +26,7 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 WORD = re.compile(r"[A-Za-z_]{1,32}")
 SHA256 = re.compile(r"[0-9a-f]{64}")

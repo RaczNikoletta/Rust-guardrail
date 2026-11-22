@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+import random
 
 DEFAULT_URL = "http://127.0.0.1:3000/v1/chat"
 ZWSP = "\u200b"  # zero-width space
@@ -153,25 +154,35 @@ def send(url, token, prompt, timeout):
     return code, data, elapsed_ms
 
 
-def run_case(args, token, group, category, prompt, secrets=()):
-    code, data, elapsed_ms = send(args.url, token, prompt, args.timeout)
-    if code == 401:
-        sys.exit("401 Unauthorized: set GUARDRAIL_TOKEN (environment or .env) or pass --token.")
-    if code == 429:
-        sys.exit("429 Too Many Requests: set RATE_LIMIT_PER_MINUTE=0 (or a higher value) in .env and restart the proxy.")
+def run_case(args, token, group, category, prompt, secrets=(), retries=2):
+    for attempt in range(retries + 1):
+        code, data, elapsed_ms = send(args.url, token, prompt, args.timeout)
+        if code == 401:
+            sys.exit("401 Unauthorized: set GUARDRAIL_TOKEN (environment or .env) or pass --token.")
+        if code in (429, 502, 503) and attempt < retries:
+            time.sleep(1.0 * (attempt + 1))
+            continue
+        break
 
-    answered = "blocked" in data  # a 413 or other odd reply has no guardrail JSON
+    if not isinstance(data, dict):
+        data = {}
+
+    status = data.get("status", "-")
+    llm_error = (code >= 500) or (status == "LLM_ERROR")
+    answered = ("blocked" in data) and not llm_error
     blocked = data.get("blocked") is True
     sanitized = data.get("sanitized_prompt", "")
 
-    if not answered:
+    if llm_error:
+        ok = None  # upstream LLM hiba: nem MISS és nem OK
+    elif not answered:
         ok = False
     elif group == "attack":
-        ok = blocked  # the attack must be stopped
+        ok = blocked
     elif group == "pii":
         ok = not blocked and not any(secret in sanitized for secret in secrets)
     else:  # benign
-        ok = not blocked and sanitized == prompt  # not blocked, not altered
+        ok = not blocked and sanitized == prompt
 
     return {
         "group": group,
@@ -181,7 +192,7 @@ def run_case(args, token, group, category, prompt, secrets=()):
         "blocked": blocked,
         "altered": answered and not blocked and sanitized != prompt,
         "http": code,
-        "status": data.get("status", "-"),
+        "status": status,
         "ms": round(elapsed_ms, 1),
     }
 
@@ -199,8 +210,14 @@ def percentile(values, p):
 
 
 def print_rate(label, results):
-    passed = sum(1 for r in results if r["ok"])
-    print(f"  {label:<14} {passed:>3}/{len(results):<3} {100 * passed / len(results):5.1f}%")
+    valid = [r for r in results if r["ok"] is not None]
+    errors = len(results) - len(valid)
+    passed = sum(1 for r in valid if r["ok"])
+    err_note = f"  (err={errors})" if errors else ""
+    if not valid:
+        print(f"  {label:<14}   0/0     0.0%{err_note}")
+        return
+    print(f"  {label:<14} {passed:>3}/{len(valid):<3} {100 * passed / len(valid):5.1f}%{err_note}")
 
 
 def main():
@@ -220,13 +237,19 @@ def main():
 
     print(f"Rust Guardrail benchmark: {len(cases)} prompts -> {args.url}\n")
     print("  OK   = the guard did the right thing")
-    print("  MISS = it did not (a MISS in 'paraphrase' is a known limitation)\n")
+    print("  MISS = it did not (a MISS in 'paraphrase' is a known limitation)")
+    print("  ERR  = upstream / LLM error (excluded from guard accuracy)\n")
 
     results = []
     for group, category, prompt, secrets in cases:
         r = run_case(args, token, group, category, prompt, secrets)
         results.append(r)
-        mark = "OK" if r["ok"] else "MISS"
+        if r["ok"] is None:
+            mark = "ERR"
+        elif r["ok"]:
+            mark = "OK"
+        else:
+            mark = "MISS"
         print(f"  [{mark:<4}] {r['group']:<6} {category:<10} {r['ms']:7.1f} ms  {r['http']} {r['status']:<22} {printable(prompt)}")
         if args.delay:
             time.sleep(args.delay)
@@ -247,10 +270,11 @@ def main():
     print("\nBenign (should pass unchanged):")
     for category in ("normal", "tricky"):
         print_rate(category, [r for r in benign if r["category"] == category])
-    false_positives = [r for r in benign if r["blocked"]]
-    altered = [r for r in benign if r["altered"]]
-    print(f"  false positives (blocked): {len(false_positives)}/{len(benign)}")
-    print(f"  altered (redacted by mistake): {len(altered)}/{len(benign)}")
+    valid_benign = [r for r in benign if r["ok"] is not None]
+    false_positives = [r for r in valid_benign if r["blocked"]]
+    altered = [r for r in valid_benign if r["altered"]]
+    print(f"  false positives (blocked): {len(false_positives)}/{len(valid_benign)}")
+    print(f"  altered (redacted by mistake): {len(altered)}/{len(valid_benign)}")
     for r in false_positives + altered:
         print(f"    -> {printable(r['prompt'], 90)}")
 
@@ -264,11 +288,13 @@ def main():
         print(f"  blocked only      median {percentile(blocked_ms, 50):8.1f}   p95 {percentile(blocked_ms, 95):8.1f}   max {max(blocked_ms):8.1f}")
 
     out_file = Path(__file__).resolve().parent / "results.json"
+    total_errors = sum(1 for r in results if r["ok"] is None)
     summary = {
-        "attacks_blocked": f"{sum(r['ok'] for r in attacks)}/{len(attacks)}",
-        "pii_redacted": f"{sum(r['ok'] for r in pii)}/{len(pii)}",
-        "benign_ok": f"{sum(r['ok'] for r in benign)}/{len(benign)}",
+        "attacks_blocked": f"{sum(1 for r in attacks if r['ok'] is True)}/{sum(1 for r in attacks if r['ok'] is not None)}",
+        "pii_redacted": f"{sum(1 for r in pii if r['ok'] is True)}/{sum(1 for r in pii if r['ok'] is not None)}",
+        "benign_ok": f"{sum(1 for r in benign if r['ok'] is True)}/{len(valid_benign)}",
         "false_positives": len(false_positives),
+        "errors": total_errors,
         "median_ms": round(percentile(all_ms, 50), 1),
         "p95_ms": round(percentile(all_ms, 95), 1),
     }

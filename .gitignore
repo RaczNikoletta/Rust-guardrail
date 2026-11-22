@@ -8,7 +8,6 @@
 audit.jsonl
 
 # Benchmark output
-benchmark/results.json
 
 # IDE specific files
 .vscode/
