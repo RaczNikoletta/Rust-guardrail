@@ -110,6 +110,8 @@ A mérés `GEMINI_API_KEY` nélkül futott, ezért az átengedett kérések idej
 
 Az összehasonlítás a `python benchmark/run_benchmark.py --target both` paranccsal fut (beállítás: `benchmark/nemo_config/`). A NeMo-nál csak a bemeneti szűrő (`self check input`, promptonként egy LLM-hívás) fut, a PII esetek kimaradnak, mert a NeMo nem ad vissza kitakart promptot.
 
+**A mérés módja.** Egyetlen futás (`--target both --delay 1.5`): 57 prompt a Rust proxyn (a `GEMINI_API_KEY` üres volt, így csak a guardok futottak) és 47 prompt a NeMo-n (PII nélkül). A NeMo `self check input` szűrője a `gemini-3.5-flash-lite` modellt hívta. Kis mintáról van szó, és a NeMo eredménye LLM-alapú, ezért futásonként változhat, így a számok nagyságrendi összehasonlításra alkalmasak, pontos százalékokra nem.
+
 | Mérés | Rust Guardrail | NeMo `self check input` |
 |---|---|---|
 | Direct | 10/10 | 10/10 |
@@ -192,9 +194,20 @@ Benchmark futtatása: a `GEMINI_API_KEY` legyen üres a tiszta guard idő méré
 - A rate limit számlálói memóriában vannak, újraindításkor nullázódnak. Egyetlen `GUARDRAIL_TOKEN` esetén az összes kliens közös számlálót használ. Az ablakhatáron rövid ideig a limit kétszerese is átmehet. A 429 válasz nem tartalmaz `Retry-After` fejlécet.
 - Az audit napló nincs védve módosítás ellen, 5 MB-os korlátja van forgatás nélkül, és a prompt sima SHA-256 ujjlenyomata rövid vagy kitalálható prompt esetén visszafejthető. A naplót bizalmasként kell kezelni.
 - A NeMo összehasonlításban az LLM-alapú ellenőrzés eredménye futásról futásra változhat, és a PII esetek nem hasonlíthatók össze.
+- A tesztkészletet a guarddal együtt írtam, a `direct` és `obfuscated` promptok a guard saját mintáihoz készültek. A 18/18 ezért azt mutatja, hogy a guard felismeri a saját mintáit, és nem általánosítható detekciós arány. A független rész a `paraphrase` csoport, ahol a Rust guard egyet sem kap el.
 
 ## 10. Továbbfejlesztési lehetőségek
 
 - **Fájlfeltöltés-védelem:** szöveges fájlok (`.txt`, `.md`, `.csv`) ellenőrzése méret, kiterjesztés, fájlnév és UTF-8 szerint, a tartalom átengedése a meglévő guardokon, és a fájl SHA-256 hash-ének VirusTotal lekérdezése a fájl feltöltése nélkül. Ehhez egy közös `run_guards()` függvény és egy `POST /v1/upload` végpont kell.
 - `Retry-After` fejléc a 429 válaszhoz, és az upstream hibák újrapróbálása.
 - Szemantikus réteg (Python) a parafrazált támadások felismeréséhez a determinisztikus réteg mögött.
+
+## 11. Felhasznált AI eszközök
+
+| Eszköz | Mire használtam |
+|---|---|
+| Claude | a kódfejlesztés nagy része (guardok, proxy, benchmark) és a dokumentáció |
+| ChatGPT | tervezés |
+| Gemini | a kezdeti kódarchitektúra és a futási hibák keresése |
+
+A kód működését egységtesztek és a benchmark ellenőrzi.
