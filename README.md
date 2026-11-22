@@ -326,13 +326,12 @@ $env:OPENAI_API_KEY = "<same value as GEMINI_API_KEY>"   # NeMo reaches Gemini t
 python benchmark/run_benchmark.py --target both --delay 1.5
 ```
 
-NeMo is configured in `benchmark/nemo_config/` with one input rail (`self check input`, an LLM call per prompt) and runs in-process. Only the input rail runs, so the main model never answers and the latency is the guard alone. Differences to keep in mind:
+NeMo is configured in `benchmark/nemo_config/` with one input rail (`self check input`, an LLM call per prompt) and runs in-process. Only the input rail runs, so the main model never answers; the measured latency is the guard check including its one LLM call (model `gemini-3.5-flash-lite`). Differences to keep in mind:
 
 * NeMo does not return a redacted prompt, so the 10 PII cases are run for the Rust proxy only. For the benign prompts, NeMo is only checked for not blocking.
 * The self-check is an LLM, so its result can change between runs. The first NeMo call (warm-up) is not measured.
 * NeMo's engine name and rail API depend on the installed version; check `benchmark/nemo_config/config.yml` if the model fails to load.
 
-Use --delay 1.5 to pace requests and avoid upstream LLM rate limits/quota errors.
 <img width="712" height="40" alt="image" src="https://github.com/user-attachments/assets/634fa880-b947-413d-8551-2ee4be31b152" />
 
 <img width="1551" height="593" alt="image" src="https://github.com/user-attachments/assets/567edde2-4a89-4c9d-961f-33db24fd27e8" />
@@ -356,6 +355,22 @@ Rust vs. NeMo `self check input` (the 10 PII cases are Rust only; NeMo makes one
 | p95 latency (blocked prompts) | 30.0 ms | 6444 ms |
 
 NeMo detects more, mainly the paraphrased attacks. The Rust guard is about 60 times faster, needs no LLM call, gives the same result every run, and redacts PII before anything leaves the proxy. NeMo's latency is mostly the Gemini call and varies with the API load.
+
+**How it was measured.** One run of `python benchmark/run_benchmark.py --target both --delay 1.5`: 57 prompts through the Rust proxy (`GEMINI_API_KEY` empty, so only the guards ran) and 47 through NeMo (no PII cases). NeMo's `self check input` called `gemini-3.5-flash-lite`. This is a small sample, and NeMo's result comes from an LLM and can change between runs, so the numbers are good for comparing orders of magnitude, not for exact percentages.
+
+**Limits of the test set.** The test prompts were written together with the guard. The `direct` and `obfuscated` prompts follow the guard's own patterns, so 18/18 shows that the guard recognises its own patterns and is not a general detection rate. The `paraphrase` group is the independent part of the test, and there the Rust guard catches none.
+
+---
+
+## AI Assistance
+
+| Tool | Used for |
+|---|---|
+| Claude | most of the code development (guards, proxy, benchmark) and the documentation |
+| ChatGPT | planning and design |
+| Gemini | the initial code architecture and debugging runtime errors |
+
+The behaviour of the code is checked by the unit tests and the benchmark.
 
 
 
