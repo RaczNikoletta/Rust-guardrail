@@ -1,0 +1,12 @@
+# NeMo Guardrails config for the benchmark comparison (input rail only).
+# The engine name depends on the installed langchain provider; langchain-google-genai
+# reads the key from GOOGLE_API_KEY (use the same value as GEMINI_API_KEY).
+models:
+  - type: main
+    engine: google_genai
+    model: gemini-2.5-flash-lite
+
+rails:
+  input:
+    flows:
+      - self check input
