@@ -243,7 +243,7 @@ The proxy parses attacker-controlled text and sits on the critical path of every
 | AI / NLP ecosystem | weak | weak | weak | **excellent** | medium |
 | Learning curve | **steep** | steep | gentle | gentle | medium |
 
-**Trade-offs.** Rust has a steeper learning curve and slower prototyping than Python, and a much weaker AI/NLP ecosystem. This is why semantic detection is out of scope and a hybrid design with a Python layer is suggested (see the comparison below). Rust does not fix logic flaws: the blacklist-based injection guard is as bypassable in Rust as in any other language, and security details such as the constant-time token comparison still have to be written by hand. Go would also have been a reasonable choice (memory safe, simple, good HTTP support); Rust was preferred for its type system and the absence of a GC.
+**Trade-offs.** Rust has a steeper learning curve than Python: ownership and borrowing, async code and error handling are expected from the start, so getting started and prototyping are slower. Its AI/NLP ecosystem is also much weaker: the language models, embeddings and frameworks needed for semantic detection are mostly built for Python. This is why semantic detection is out of scope and a hybrid design is suggested: the fast Rust layer first, a Python or LLM based layer behind it (see the comparison below). Rust does not fix logic flaws: the blacklist-based injection guard is as bypassable in Rust as in any other language, and security details such as the constant-time token comparison still have to be written by hand. Go would also have been a reasonable choice (memory safe, simple, good HTTP support); Rust was preferred for its type system and the absence of a GC.
 
 ---
 
@@ -401,6 +401,57 @@ NeMo detects more, mainly the paraphrased attacks. The Rust guard is about 60 ti
 | Gemini | the initial code architecture and debugging runtime errors |
 
 The behaviour of the code is checked by the unit tests and the benchmark.
+
+### My decisions
+
+| Area | My decision |
+|---|---|
+| Language | I chose Rust. |
+| Injection patterns | I reviewed and revised the injection patterns. |
+| Card check | I reviewed and revised the Luhn check. |
+| Hungarian PII | I asked for Hungarian TAJ number support. |
+| Code style | I asked the AI to keep the code simple and easy to understand, so that I can learn from it. |
+| Comparison | I wanted to compare the guard with NeMo Guardrails and chose `gemini-3.5-flash-lite` for it, because `gemini-2.5` is outdated. |
+| Fair latency | I removed `GEMINI_API_KEY` for the Rust measurement, so only the guards are timed. |
+| Incident audit skill | I pointed out that a skill is meant to be given to an LLM. The first version was a script that calls Gemini itself; it was reworked into an agent skill with a `--json` output. |
+| Skill rules | I checked the reports that the agent wrote and asked for stricter rules until they contained no claims the data does not support. |
+| Honest results | The documentation keeps the weak results (`paraphrase` 0/9, NeMo detects more) and the limits of the test set. |
+
+Examples of how I steered the AI:
+
+* **Gemini 404 error.** I reported what I tried and that a direct call did not give a 404 but a 503. The cause was the `models/` prefix in the model name; the remaining 503 was Google's overload, not a bug.
+* **Audit skill.** I noticed that a skill is meant to be given to an LLM. The script that called Gemini itself became an agent skill with a `--json` output.
+* **Skill rules.** I checked the reports that the agent wrote and asked for stricter rules, until they no longer contained claims that the data does not support.
+* **PII and NeMo.** I asked why PII was not measured and had the wording corrected: there is no PII rail in the NeMo configuration.
+* **NeMo latency.** I asked whether the LLM call is the cause. The measured time is mostly the Gemini call, which is an unavoidable part of that guard.
+
+---
+
+## Key Takeaways
+
+**What I learned from the project**
+
+1. **Using a skill for a concrete task (an incident report).** A skill is an instruction for an agent: the script does the deterministic part (validation, statistics) and the agent writes the text. I had to test it and tighten the rules based on the agent's output, because an LLM does not follow rules by itself. Its output has to be checked.
+2. **Rust for a proxy like this.**
+   * **Easy to test:** the guards are pure functions, and the tests sit at the end of each source file and run without a network (for example the Gemini request builder and the answer extraction need no key).
+   * **Strict memory rules:** the compiler enforces ownership and thread safety (`Arc<AppState>`), the project has no `unsafe` code, and missing values are `Option` / `Result`.
+   * **Fast:** all guards together take a median of 17.5 ms per request, including the local HTTP round trip, orders of magnitude less than an LLM-based check.
+   * **Cost:**
+     * **A steeper learning curve:** Rust expects knowledge of ownership and borrowing, async code (`tokio`, `axum`) and error handling (`Option`, `Result`) from the start, so getting started and prototyping are slower than in Python. This is why I asked for simple, easy to understand code.
+     * **No ready-made ecosystem for semantic detection:** recognising paraphrased attacks needs language models, embeddings or ready-made frameworks, and these are mostly built for Python (NeMo Guardrails is Python too). Rust has few of them, so a semantic layer would be an external LLM call or a Python component. This is why the documentation suggests a hybrid design, and the benchmark and the audit script in this project are Python as well.
+3. **Strengths and weaknesses of this kind of guardrail.**
+   * **Strengths:** fast, cheap (0 LLM calls), deterministic and explainable (you see which pattern matched), and PII is redacted before anything leaves the proxy.
+   * **Weaknesses:** a blacklist only knows its patterns and languages (0/9 paraphrased attacks), it does not understand context (false positive on a quoted attack phrase), and a safe language does not fix logic errors.
+   * **So:** the deterministic and the semantic approach complement each other: the fast, cheap layer first, a semantic layer behind it.
+4. **New to me, introduced by the AI.**
+   * **Canary token:** a random secret in the system instruction. If it shows up in the model's answer, the model leaked its instructions and the answer is blocked. It caught two cases during the benchmark runs.
+   * **Normalization:** every guard sees the same canonical text (NFKC, invisible characters removed, look-alike letters folded), so a hidden attack cannot slip past one guard. A plain regex cannot do this.
+   * **Putting an LLM into a project:** the system instruction and the user text travel in separate fields, the key goes in a header, there is a timeout, the error body is not copied into the error message, and a missing answer does not crash the proxy. The LLM's output is treated as untrusted data (canary, the skill's rules).
+5. **What I experienced on the way.**
+   * **The test set deserves a closer look because of bias.** The prompts were written together with the guard, so 18/18 shows that the guard recognises its own patterns. The independent part is the `paraphrase` group, where the Rust guard catches none. A better test would also contain prompts from another source.
+   * **The way of measuring matters.** While Gemini was enabled for the Rust measurement, the latency included the Gemini call. Only after removing the key did the guard times become comparable.
+   * **The AI's statements have to be checked.** Examples: the wrong model name (`models/` prefix), the inaccurate reason why PII is not measured for NeMo, and the unsupported claims in the agent's report.
+6. **Basic knowledge of the subject is needed even with an AI.** A small detail from class about skills (a skill is meant to be given to an LLM) was enough to notice that the first version of the audit tool was heading in the wrong direction. An AI can produce a lot quickly, but only someone who understands the topic at least a little can judge whether the result is right.
 
 
 
