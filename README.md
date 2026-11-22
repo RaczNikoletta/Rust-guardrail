@@ -300,9 +300,9 @@ cargo run                                # terminal 1: start the proxy
 python benchmark/run_benchmark.py        # terminal 2: run the benchmark
 ```
 
-Options: `--url` (default `http://127.0.0.1:3000/v1/chat`), `--token` (default: `GUARDRAIL_TOKEN` from the environment or `.env`), `--delay` (seconds between requests, useful against Gemini rate limits), `--timeout`.
+Options: `--target` (`rust`, `nemo` or `both`, default `rust`), `--url` (default `http://127.0.0.1:3000/v1/chat`), `--token` (default: `GUARDRAIL_TOKEN` from the environment or `.env`), `--nemo-config`, `--delay` (seconds between requests, useful against Gemini rate limits), `--timeout`.
 
-For guard-only latency, leave `GEMINI_API_KEY` empty in `.env` while benchmarking. Otherwise every prompt that passes the guards also waits for the Gemini answer. Set `RATE_LIMIT_PER_MINUTE=0` while benchmarking: the script sends 57 prompts quickly and a second run within a minute would hit the default limit (the script stops with a message on a 429). The prompts contain no URLs or IP addresses, so VirusTotal quota is not used.
+For guard-only latency, leave `GEMINI_API_KEY` empty in `.env` while benchmarking. Otherwise every prompt that passes the guards also waits for the Gemini answer. Set `RATE_LIMIT_PER_MINUTE=0` while benchmarking: the script sends 57 prompts quickly and a second run within a minute would hit the default limit (the script retries a 429 twice, then counts the prompt as an error). The prompts contain no URLs or IP addresses, so VirusTotal quota is not used.
 
 | Group | Prompts | Counted as correct when |
 |---|---|---|
@@ -313,7 +313,23 @@ For guard-only latency, leave `GEMINI_API_KEY` empty in `.env` while benchmarkin
 | Benign: `normal` | 12, English and Hungarian | not blocked and returned unchanged |
 | Benign: `tricky` | 8, close to the attack patterns or looking like PII (git blame, order numbers, dates, version numbers) | not blocked and returned unchanged. One prompt that quotes an attack phrase is a known false positive. |
 
-The script prints one line per prompt, then the rates per group, the false positives, the prompts that were altered by mistake, and the latency (median, p95, max; blocked requests alone give the pure guard time because they never reach Gemini or VirusTotal). The full results are saved to `benchmark/results.json`.
+The script prints one line per prompt, then the rates per group, the false positives, the prompts that were altered by mistake, and the latency (median, p95, max; blocked requests alone give the pure guard time because they never reach Gemini or VirusTotal). The full results are saved to `benchmark/results.json` (one entry per target).
+
+### Comparison with NeMo Guardrails
+
+`--target both` runs the same prompts through the Rust proxy and through NeMo Guardrails and prints the results side by side.
+
+```powershell
+pip install nemoguardrails langchain-google-genai
+$env:GOOGLE_API_KEY = "<same value as GEMINI_API_KEY>"
+python benchmark/run_benchmark.py --target both --delay 1.5
+```
+
+NeMo is configured in `benchmark/nemo_config/` with one input rail (`self check input`, an LLM call per prompt) and runs in-process. Only the input rail runs, so the main model never answers and the latency is the guard alone. Differences to keep in mind:
+
+* NeMo does not return a redacted prompt, so the 10 PII cases are run for the Rust proxy only. For the benign prompts, NeMo is only checked for not blocking.
+* The self-check is an LLM, so its result can change between runs. The first NeMo call (warm-up) is not measured.
+* NeMo's engine name and rail API depend on the installed version; check `benchmark/nemo_config/config.yml` if the model fails to load.
 
 Use --delay 1.5 to pace requests and avoid upstream LLM rate limits/quota errors.
 <img width="712" height="40" alt="image" src="https://github.com/user-attachments/assets/634fa880-b947-413d-8551-2ee4be31b152" />
