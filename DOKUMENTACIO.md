@@ -128,6 +128,33 @@ Az összehasonlítás a `python benchmark/run_benchmark.py --target both` paranc
 
 Értékelés: a NeMo minden támadást elkapott, és hamis pozitívja sem volt, a detekcióban tehát egyértelműen jobb. A Rust guard viszont körülbelül 60-szor gyorsabb (a mediánok 17,5 ms és 1017 ms, a p95-ek 27,9 ms és 5475 ms), nem igényel LLM-hívást, determinisztikus, és a PII-t külső hívás előtt kitakarja. A NeMo `self check input` a nyers promptot küldi a Gemini-nek, a késleltetése pedig főként az LLM-hívásból adódik, és a külső API terhelésétől függ.
 
+### Az audit napló és az incidens riport (példa)
+
+A benchmark-futások közben a proxy minden blokkolt kérést naplózott, a `python audit/report.py --no-llm` pedig összesítette:
+
+```text
+=== Incident statistics ===
+Total incidents : 191
+Skipped lines   : 0
+Period          : 2026-11-20 12:00 UTC  ->  2026-11-22 09:00 UTC
+By guard:
+  injection       189
+  output_canary   2
+By status:
+  INJECTION_BLOCKED       189
+  OUTPUT_BLOCKED          2
+Busiest hour    : 2026-11-22 09:00 UTC (58 incidents)
+Repeated prompts (same SHA-256):
+  32126a0c69d7...  x30  injection
+  b70607ca30f3...  x10  injection
+  ...
+Prompt length   : min 25, avg 47.7, max 94 bytes
+```
+
+- **Az adat a benchmarkból származik, nem valódi forgalomból.** Az ismétlődő hash-ek (`x10`) azt mutatják, hogy a promptok körülbelül tízszer lefutottak, a legforgalmasabb óra pedig a legutóbbi benchmark-futás. A 189 `injection` incidens tartalmazza az ismert hamis pozitívot is.
+- **A 2 `output_canary` incidens a kétrétegű védelmet mutatja.** A prompt átment az input guardokon, a Gemini válasza viszont tartalmazta a canary tokent. A proxy ezt észlelte (`[ALERT] Canary found in the model's answer, answer blocked`), a válasz helyett `OUTPUT_BLOCKED` státuszt adott, és naplózta az esetet. A feketelista nem fogta meg a promptot, az output guard igen.
+- **A canary-ellenőrzés csak akkor fut, ha a Gemini be van kapcsolva.** A `GEMINI_API_KEY` nélkül lefuttatott benchmark (18/27) ezért csak az input guardokat méri, az output guard hatása abban nem látszik.
+
 ## 7. Összehasonlítás a NeMo Guardrails-szel
 
 | Szempont | Rust Guardrail | NeMo Guardrails |
