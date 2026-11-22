@@ -319,7 +319,7 @@ For guard-only latency, leave `GEMINI_API_KEY` empty in `.env` while benchmarkin
 
 The script prints one line per prompt, then the rates per group, the false positives, the prompts that were altered by mistake, and the latency (median, p95, max; blocked requests alone give the pure guard time because they never reach Gemini or VirusTotal). The full results are saved to `benchmark/results.json`.
 
-**Results: TODO.** Run the script and paste the table here. The test set is small and written by the author, so the numbers describe this prototype on these prompts only, not detection quality in general.
+
 
 ---
 
