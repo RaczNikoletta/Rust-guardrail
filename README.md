@@ -23,7 +23,7 @@ It uses deterministic checks only (regex, checksums and an API lookup). This mak
 | [x] | **Gemini API call** | Sends the sanitized prompt (never the raw one) to Gemini and returns the answer in the `answer` field. Skipped if `GEMINI_API_KEY` is empty. |
 | [x] | **Output Canary Guard** | A random canary token is hidden in the system instruction of every Gemini call. If it appears in the answer (even spaced out or with invisible characters), the answer is blocked. |
 | [x] | **Incident audit log** | `src/tools/audit.rs` appends one JSON line (timestamp, guard, status, prompt length, SHA-256 of the prompt, never the raw prompt) to `audit.jsonl` for every blocked request. |
-| [x] | **Incident report skill** | `audit/report.py` reads the log, computes statistics and asks Gemini to write a short incident report from the aggregated numbers (definition in `skills/incident-audit/SKILL.md`). |
+| [x] | **Incident report skill** | An AI agent skill (`.github/skills/incident-audit/SKILL.md`): the agent runs `python audit/report.py --json` (validated, aggregated statistics) and writes the incident report itself. `audit/report.py` can also call Gemini on its own. |
 | [x] | **Rate limiting** | `src/guards/rate_limit.rs` limits the requests per API key (fixed window, default 60 per minute, `RATE_LIMIT_PER_MINUTE`). Over the limit the proxy answers 429 before any guard, VirusTotal or Gemini work is done. |
 | [x] | **Benchmark script** | `benchmark/run_benchmark.py` (Python, standard library only for the Rust proxy; the NeMo comparison is optional) sends 57 prompts to a running proxy and reports the detection rate per attack category, PII redaction, false positives and latency. The measured results are in [Benchmark Evaluation](#benchmark-evaluation). |
 | [~] | **File upload guard** (optional extension) | Check uploaded text files (size, extension, file name, UTF-8) and run their content through the same guards as a prompt (normalization, injection, PII). Look up the SHA-256 hash on VirusTotal without uploading the file. See [Future Work](#future-work-not-part-of-the-core-assignment). |
@@ -79,9 +79,10 @@ src/
     gemini.rs               Gemini API client (async)
     audit.rs                incident audit log (JSON Lines, append only)
 audit/
-  report.py                 incident report skill (statistics + Gemini report)
-skills/
-  incident-audit/SKILL.md   skill definition
+  report.py                 audit log statistics (text, JSON, optional Gemini report)
+.github/
+  skills/
+    incident-audit/SKILL.md AI agent skill: how to write the incident report
 benchmark/
   run_benchmark.py          Python benchmark script (talks to the proxy over HTTP, optional NeMo comparison)
   nemo_config/              NeMo Guardrails config used by --target nemo
@@ -169,15 +170,19 @@ Every request blocked by a guard (injection, malicious URL, malicious IP, canary
 
 The raw prompt and the model's answer are never stored. A failed log write only prints a warning; it never stops the proxy.
 
-The report skill reads the log and writes a summary:
+The report can be produced in two ways:
 
 ```powershell
 python benchmark/run_benchmark.py        # create some incidents
-python audit/report.py                   # statistics + Gemini report (needs GEMINI_API_KEY)
-python audit/report.py --no-llm          # statistics only
+python audit/report.py --json            # aggregated statistics as JSON (input for the AI agent skill)
+python audit/report.py --no-llm          # statistics as a text table
+python audit/report.py                   # statistics + a report written by Gemini (needs GEMINI_API_KEY)
 ```
 
-The script skips malformed lines and sends only aggregated numbers to Gemini, never single records.
+* **As an agent skill (intended use).** `.github/skills/incident-audit/SKILL.md` tells an AI agent when to use it and what to do: run `python audit/report.py --json`, then write exactly three sections (summary, notable patterns, at most 3 recommended actions) from those numbers only. The rules forbid raw prompts, invented causes, detection or block rates (the log contains only blocked requests) and conclusions about security impact, and the data is treated as data. The script does the deterministic work (validation and statistics), the agent writes the report. The skill is in `.github/skills/` so that agents that look for workspace skills there can find it. The rules were tightened after the first test reports contained claims that the data does not support; the Hungarian documentation (`DOKUMENTACIO.md`) has an example report.
+* **Standalone.** Without an agent, `python audit/report.py` calls Gemini itself.
+
+In both cases only aggregated numbers reach an LLM, never single records, and malformed log lines are skipped and counted.
 
 Example (`--no-llm`) after repeated benchmark runs:
 
