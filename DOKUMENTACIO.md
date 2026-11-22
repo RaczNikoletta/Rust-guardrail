@@ -36,7 +36,8 @@ Egy kérés a fenti lépéseken halad végig. Bármelyik guard blokkolhatja, ily
 | `src/tools/threat_intel.rs` | VirusTotal URL és IP lekérdezés (async) |
 | `src/tools/gemini.rs` | Gemini API kliens (async) |
 | `src/tools/audit.rs` | incidens naplózás (JSON Lines, csak hozzáfűzés) |
-| `audit/report.py` | incidens riport (statisztika és Gemini által írt összefoglaló) |
+| `audit/report.py` | az audit napló statisztikája (szöveg, JSON, opcionálisan Gemini által írt riport) |
+| `.github/skills/incident-audit/SKILL.md` | AI-ágens skill: hogyan írja meg az ágens az incidens riportot |
 | `benchmark/run_benchmark.py` | benchmark script, opcionális NeMo összehasonlítással |
 
 ## 3. Funkciók
@@ -54,7 +55,7 @@ Egy kérés a fenti lépéseken halad végig. Bármelyik guard blokkolhatja, ily
 | Biztonságos naplózás | A nyers prompt soha nem kerül naplóba vagy válaszba, csak a hossza. |
 | Méretkorlát | 16 KB-nál nagyobb kérés elutasítva (413). |
 | Audit napló | Minden blokkolt kérésről egy JSON sor (időbélyeg, guard, hossz, a prompt SHA-256 ujjlenyomata), a prompt szövege nélkül. |
-| Incidens riport | Az `audit/report.py` a naplóból statisztikát készít, és a Gemini az aggregált számokból rövid riportot ír. |
+| Incidens riport (skill) | AI-ágens skill (`.github/skills/incident-audit/SKILL.md`): az ágens lefuttatja a `python audit/report.py --json` parancsot (validált, aggregált statisztika), és a számokból maga írja meg a riportot (összefoglaló, minták, javasolt lépések). A script ágens nélkül is működik: a `python audit/report.py` maga hívja a Gemini-t. |
 
 ## 4. Biztonsági tervezési döntések
 
@@ -130,7 +131,7 @@ Az összehasonlítás a `python benchmark/run_benchmark.py --target both` paranc
 
 ### Az audit napló és az incidens riport (példa)
 
-A benchmark-futások közben a proxy minden blokkolt kérést naplózott, a `python audit/report.py --no-llm` pedig összesítette:
+A benchmark-futások közben a proxy minden blokkolt kérést naplózott, a `python audit/report.py --no-llm` pedig összesítette. (Ugyanezt a statisztikát adja a `--json` kapcsoló gépi formában az AI-ágens skillnek, amely ebből írja a riportot: a script a determinisztikus részt végzi, az ágens a szöveget. Csak aggregált számok jutnak LLM-hez, nyers prompt soha.)
 
 ```text
 === Incident statistics ===
