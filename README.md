@@ -320,8 +320,8 @@ The script prints one line per prompt, then the rates per group, the false posit
 `--target both` runs the same prompts through the Rust proxy and through NeMo Guardrails and prints the results side by side.
 
 ```powershell
-pip install nemoguardrails langchain-google-genai
-$env:GOOGLE_API_KEY = "<same value as GEMINI_API_KEY>"
+pip install nemoguardrails
+$env:OPENAI_API_KEY = "<same value as GEMINI_API_KEY>"   # NeMo reaches Gemini through its OpenAI-compatible endpoint
 python benchmark/run_benchmark.py --target both --delay 1.5
 ```
 
