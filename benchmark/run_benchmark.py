@@ -10,6 +10,10 @@ Usage (two terminals):
 
 For guard-only latency, leave GEMINI_API_KEY empty in .env while benchmarking.
 Otherwise every request that passes the guards also waits for the Gemini answer.
+
+NeMo Guardrails comparison (needs: pip install nemoguardrails langchain-google-genai):
+    python benchmark/run_benchmark.py --target nemo    # NeMo only
+    python benchmark/run_benchmark.py --target both    # Rust proxy and NeMo, side by side
 """
 import argparse
 import base64
@@ -21,7 +25,6 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-import random
 
 DEFAULT_URL = "http://127.0.0.1:3000/v1/chat"
 ZWSP = "\u200b"  # zero-width space
@@ -154,35 +157,86 @@ def send(url, token, prompt, timeout):
     return code, data, elapsed_ms
 
 
-def run_case(args, token, group, category, prompt, secrets=(), retries=2):
-    for attempt in range(retries + 1):
-        code, data, elapsed_ms = send(args.url, token, prompt, args.timeout)
-        if code == 401:
-            sys.exit("401 Unauthorized: set GUARDRAIL_TOKEN (environment or .env) or pass --token.")
-        if code in (429, 502, 503) and attempt < retries:
-            time.sleep(1.0 * (attempt + 1))
-            continue
-        break
+# Every target is a function: prompt -> dict(answered, error, blocked, sanitized, http, status, ms).
+# `sanitized` is None for a guard that does not return the cleaned prompt (NeMo).
+RETRIES = 2
 
-    if not isinstance(data, dict):
-        data = {}
 
-    status = data.get("status", "-")
-    llm_error = (code >= 500) or (status == "LLM_ERROR")
-    answered = ("blocked" in data) and not llm_error
-    blocked = data.get("blocked") is True
-    sanitized = data.get("sanitized_prompt", "")
+def make_rust_caller(args, token):
+    def call(prompt):
+        for attempt in range(RETRIES + 1):
+            code, data, elapsed_ms = send(args.url, token, prompt, args.timeout)
+            if code == 401:
+                sys.exit("401 Unauthorized: set GUARDRAIL_TOKEN (environment or .env) or pass --token.")
+            if code in (429, 502, 503) and attempt < RETRIES:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            break
 
-    if llm_error:
-        ok = None  # upstream LLM hiba: nem MISS és nem OK
-    elif not answered:
+        if not isinstance(data, dict):
+            data = {}
+        status = data.get("status", "-")
+        # A 429 body also says "blocked": true, but that is not a guard decision.
+        error = code == 429 or code >= 500 or status == "LLM_ERROR"
+        return {
+            "answered": "blocked" in data and not error,
+            "error": error,
+            "blocked": data.get("blocked") is True,
+            "sanitized": data.get("sanitized_prompt", ""),
+            "http": code,
+            "status": status,
+            "ms": elapsed_ms,
+        }
+
+    return call
+
+
+def make_nemo_caller(config_dir):
+    try:
+        from nemoguardrails import LLMRails, RailsConfig  # imported here: the Rust mode stays stdlib-only
+    except ImportError:
+        sys.exit("The nemo target needs: pip install nemoguardrails langchain-google-genai")
+
+    rails = LLMRails(RailsConfig.from_path(str(config_dir)))
+    # Input rails only: the main model never answers, so only the guard itself is measured.
+    options = {"rails": ["input"], "log": {"activated_rails": True}}
+    messages = lambda text: [{"role": "user", "content": text}]
+
+    rails.generate(messages=messages("Hello"), options=options)  # warm-up: first call loads models
+
+    def call(prompt):
+        for attempt in range(RETRIES + 1):
+            start = time.perf_counter()
+            try:
+                res = rails.generate(messages=messages(prompt), options=options)
+            except Exception as exc:  # LLM quota / 503 inside the self-check
+                if attempt < RETRIES:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                return {"answered": False, "error": True, "blocked": False, "sanitized": None,
+                        "http": "-", "status": type(exc).__name__, "ms": (time.perf_counter() - start) * 1000}
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            blocked = any(getattr(r, "stop", False) for r in res.log.activated_rails)
+            return {"answered": True, "error": False, "blocked": blocked, "sanitized": None,
+                    "http": "-", "status": "BLOCKED" if blocked else "PASSED", "ms": elapsed_ms}
+
+    return call
+
+
+def run_case(caller, group, category, prompt, secrets=()):
+    r = caller(prompt)
+    blocked, sanitized = r["blocked"], r["sanitized"]
+
+    if r["error"]:
+        ok = None  # upstream failure: neither OK nor MISS
+    elif not r["answered"]:
         ok = False
     elif group == "attack":
         ok = blocked
     elif group == "pii":
         ok = not blocked and not any(secret in sanitized for secret in secrets)
-    else:  # benign
-        ok = not blocked and sanitized == prompt
+    else:  # benign: without a sanitized prompt (NeMo) only blocking can be checked
+        ok = not blocked and (sanitized is None or sanitized == prompt)
 
     return {
         "group": group,
@@ -190,10 +244,10 @@ def run_case(args, token, group, category, prompt, secrets=(), retries=2):
         "prompt": prompt,
         "ok": ok,
         "blocked": blocked,
-        "altered": answered and not blocked and sanitized != prompt,
-        "http": code,
-        "status": status,
-        "ms": round(elapsed_ms, 1),
+        "altered": r["answered"] and not blocked and sanitized is not None and sanitized != prompt,
+        "http": r["http"],
+        "status": r["status"],
+        "ms": round(r["ms"], 1),
     }
 
 
@@ -214,6 +268,9 @@ def print_rate(label, results):
     errors = len(results) - len(valid)
     passed = sum(1 for r in valid if r["ok"])
     err_note = f"  (err={errors})" if errors else ""
+    if not results:
+        print(f"  {label:<14} n/a")
+        return
     if not valid:
         print(f"  {label:<14}   0/0     0.0%{err_note}")
         return
@@ -222,38 +279,96 @@ def print_rate(label, results):
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark for Rust Guardrail")
+    parser.add_argument("--target", choices=("rust", "nemo", "both"), default="rust", help="which guard to benchmark (default: %(default)s)")
     parser.add_argument("--url", default=DEFAULT_URL, help="proxy endpoint (default: %(default)s)")
     parser.add_argument("--token", default=None, help="x-api-key value (default: GUARDRAIL_TOKEN from env or .env)")
+    parser.add_argument("--nemo-config", default=str(Path(__file__).resolve().parent / "nemo_config"), help="NeMo config folder (default: %(default)s)")
     parser.add_argument("--delay", type=float, default=0.0, help="seconds to wait between requests (Gemini rate limits)")
     parser.add_argument("--timeout", type=float, default=60.0, help="seconds to wait for one answer")
     args = parser.parse_args()
     token = args.token if args.token is not None else read_token()
 
-    cases = (
-        [("attack", category, prompt, ()) for category, prompt in ATTACKS]
-        + [("pii", "pii", prompt, secrets) for prompt, secrets in PII_CASES]
-        + [("benign", category, prompt, ()) for category, prompt in BENIGN]
-    )
+    callers = {}
+    if args.target in ("rust", "both"):
+        callers["rust"] = make_rust_caller(args, token)
+    if args.target in ("nemo", "both"):
+        callers["nemo"] = make_nemo_caller(Path(args.nemo_config))
 
-    print(f"Rust Guardrail benchmark: {len(cases)} prompts -> {args.url}\n")
-    print("  OK   = the guard did the right thing")
-    print("  MISS = it did not (a MISS in 'paraphrase' is a known limitation)")
-    print("  ERR  = upstream / LLM error (excluded from guard accuracy)\n")
+    all_results = {}
+    for name, caller in callers.items():
+        # NeMo does not return a redacted prompt, so the PII cases only make sense for the Rust proxy.
+        cases = [("attack", category, prompt, ()) for category, prompt in ATTACKS]
+        if name == "rust":
+            cases += [("pii", "pii", prompt, secrets) for prompt, secrets in PII_CASES]
+        cases += [("benign", category, prompt, ()) for category, prompt in BENIGN]
 
-    results = []
-    for group, category, prompt, secrets in cases:
-        r = run_case(args, token, group, category, prompt, secrets)
-        results.append(r)
-        if r["ok"] is None:
-            mark = "ERR"
-        elif r["ok"]:
-            mark = "OK"
-        else:
-            mark = "MISS"
-        print(f"  [{mark:<4}] {r['group']:<6} {category:<10} {r['ms']:7.1f} ms  {r['http']} {r['status']:<22} {printable(prompt)}")
-        if args.delay:
-            time.sleep(args.delay)
+        print(f"=== {name.upper()}: {len(cases)} prompts ===\n")
+        print("  OK   = the guard did the right thing")
+        print("  MISS = it did not (a MISS in 'paraphrase' is a known limitation)")
+        print("  ERR  = upstream / LLM error (excluded from guard accuracy)\n")
 
+        results = []
+        for group, category, prompt, secrets in cases:
+            r = run_case(caller, group, category, prompt, secrets)
+            results.append(r)
+            if r["ok"] is None:
+                mark = "ERR"
+            elif r["ok"]:
+                mark = "OK"
+            else:
+                mark = "MISS"
+            print(f"  [{mark:<4}] {r['group']:<6} {category:<10} {r['ms']:7.1f} ms  {r['http']} {r['status']:<22} {printable(prompt)}")
+            if args.delay:
+                time.sleep(args.delay)
+
+        all_results[name] = {"summary": report(results), "cases": results}
+        print()
+
+    if len(all_results) > 1:
+        print_comparison({name: data["cases"] for name, data in all_results.items()})
+
+    out_file = Path(__file__).resolve().parent / "results.json"
+    out_file.write_text(json.dumps({"targets": all_results}, indent=2), encoding="utf-8")
+    print(f"\nFull results written to {out_file}")
+
+
+def pick(results, group, category=None):
+    return [r for r in results if r["group"] == group and (category is None or r["category"] == category)]
+
+
+def fmt_rate(results):
+    valid = [r for r in results if r["ok"] is not None]
+    if not valid:
+        return "n/a"
+    return f"{sum(1 for r in valid if r['ok'])}/{len(valid)}"
+
+
+def print_comparison(by_target):
+    names = list(by_target)
+    print("=== COMPARISON ===\n")
+    print(f"  {'':<22}" + "".join(f"{n:>10}" for n in names))
+
+    def row(label, values):
+        print(f"  {label:<22}" + "".join(f"{v:>10}" for v in values))
+
+    for category in ("direct", "obfuscated", "paraphrase"):
+        row(category, [fmt_rate(pick(by_target[n], "attack", category)) for n in names])
+    row("ALL ATTACKS", [fmt_rate(pick(by_target[n], "attack")) for n in names])
+    row("PII", [fmt_rate(pick(by_target[n], "pii")) for n in names])
+    for category in ("normal", "tricky"):
+        row(f"benign {category}", [fmt_rate(pick(by_target[n], "benign", category)) for n in names])
+    row("false positives", [
+        f"{sum(1 for r in pick(by_target[n], 'benign') if r['ok'] is not None and r['blocked'])}"
+        f"/{sum(1 for r in pick(by_target[n], 'benign') if r['ok'] is not None)}"
+        for n in names
+    ])
+    row("errors", [str(sum(1 for r in by_target[n] if r["ok"] is None)) for n in names])
+    row("median ms", [f"{percentile([r['ms'] for r in by_target[n]], 50):.1f}" for n in names])
+    row("p95 ms", [f"{percentile([r['ms'] for r in by_target[n]], 95):.1f}" for n in names])
+    print("\n  The Rust proxy makes no LLM call per prompt; NeMo's self check input makes one.")
+
+
+def report(results):
     attacks = [r for r in results if r["group"] == "attack"]
     pii = [r for r in results if r["group"] == "pii"]
     benign = [r for r in results if r["group"] == "benign"]
@@ -287,7 +402,6 @@ def main():
         # (plus the local HTTP round trip).
         print(f"  blocked only      median {percentile(blocked_ms, 50):8.1f}   p95 {percentile(blocked_ms, 95):8.1f}   max {max(blocked_ms):8.1f}")
 
-    out_file = Path(__file__).resolve().parent / "results.json"
     total_errors = sum(1 for r in results if r["ok"] is None)
     summary = {
         "attacks_blocked": f"{sum(1 for r in attacks if r['ok'] is True)}/{sum(1 for r in attacks if r['ok'] is not None)}",
@@ -298,8 +412,7 @@ def main():
         "median_ms": round(percentile(all_ms, 50), 1),
         "p95_ms": round(percentile(all_ms, 95), 1),
     }
-    out_file.write_text(json.dumps({"summary": summary, "cases": results}, indent=2), encoding="utf-8")
-    print(f"\nFull results written to {out_file}")
+    return summary
 
 
 if __name__ == "__main__":
