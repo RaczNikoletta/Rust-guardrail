@@ -365,6 +365,14 @@ def print_comparison(by_target):
     row("errors", [str(sum(1 for r in by_target[n] if r["ok"] is None)) for n in names])
     row("median ms", [f"{percentile([r['ms'] for r in by_target[n]], 50):.1f}" for n in names])
     row("p95 ms", [f"{percentile([r['ms'] for r in by_target[n]], 95):.1f}" for n in names])
+
+    def median_of(rs):
+        return f"{percentile([r['ms'] for r in rs], 50):.1f}" if rs else "n/a"
+
+    # Blocked requests never reach Gemini, so they show the pure guard time for every target.
+    row("median ms, blocked", [median_of([r for r in by_target[n] if r["blocked"]]) for n in names])
+    row("median ms, passed", [median_of([r for r in by_target[n] if not r["blocked"] and r["ok"] is not None]) for n in names])
+    print("\n  'passed' for the Rust proxy includes the Gemini answer unless GEMINI_API_KEY was empty.")
     print("\n  The Rust proxy makes no LLM call per prompt; NeMo's self check input makes one.")
 
 
